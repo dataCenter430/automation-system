@@ -27,8 +27,8 @@ import { generateExplanations } from "./stages/explain-generate.ts";
 import { openNewSubmission, fillSubmissionForm, AttestationRefused, FormNotReady } from "./stages/upload.ts";
 import { checkFeedback, FeedbackInconclusive } from "./stages/feedback.ts";
 import { findSubmitted, clickSubmit, enableRubricGeneration } from "./stages/submit.ts";
-import { attach, detach, snorkelPage } from "./browser/cdp.ts";
-import { pageUrl, SelectorNotFound } from "./browser/selectors.ts";
+import { attach, detach, snorkelPage, BrowserUnavailable, type Attached } from "./browser/cdp.ts";
+import { SelectorNotFound, UnconfirmedSelector } from "./browser/selectors.ts";
 import { RateLimited } from "./claude/errors.ts";
 import type { Config } from "./config.ts";
 
@@ -109,6 +109,7 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
       feedbackAttempt: row.feedback_attempt ?? 0,
       zipPath: row.zip_path,
       explanations: null,
+      submissionUrl: null,
       feedbackStartedAt: null,
       lastError: row.last_error,
       updatedAt: new Date().toISOString(),
@@ -346,8 +347,12 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
       const runDir = runDirFor(cfg, slug, `upload-${s.feedbackAttempt}`);
       await emitEvent({ task_id: row.task_id, stage: "upload", status: "started", attempt: s.feedbackAttempt });
 
-      const a = await attach();
+      let a: Attached | null = null;
       try {
+        // attach() must be INSIDE the try: if Chrome is not running it throws, and outside
+        // the try that would escape advance() entirely instead of parking the task.
+        a = await attach();
+
         // Always start from a clean page. Clearing a previously-attached file is fiddly
         // and varies by dropzone; reloading and re-attaching is idempotent and sidesteps
         // the whole "which zip is actually attached" class of bug.
@@ -359,19 +364,27 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
         });
         if (r.submissionUid) await patchTask(row.task_id, { submission_id: r.submissionUid });
 
+        // Remember WHERE the filled form is. The feedback and submit stages have to come
+        // back to this exact page; asking for the home page navigated the form away.
+        patchState(ws, { submissionUrl: r.submissionUrl, feedbackStartedAt: null });
+
         await transition(ctx, row, ws, S.CHECKING_FEEDBACK, {
           stage: "upload",
           message: `form filled${r.submissionUid ? ` · uid ${r.submissionUid.slice(0, 8)}` : ""}`,
           detail: { instruction_words: r.instructionAudit.stats.words },
         });
-        patchState(ws, { feedbackStartedAt: null });
       } catch (e) {
         const msg = (e as Error).message;
-        // An attestation refusal or a broken selector is a human problem, not a retry.
-        const human = e instanceof AttestationRefused || e instanceof FormNotReady || e instanceof SelectorNotFound;
+        // An attestation refusal, a broken selector, an unconfirmed selector, or a Chrome
+        // that simply isn't running are all human problems — not task failures. Parking a
+        // good build at FAILED because nobody launched the browser would be a lie.
+        const human =
+          e instanceof AttestationRefused || e instanceof FormNotReady ||
+          e instanceof SelectorNotFound || e instanceof UnconfirmedSelector ||
+          e instanceof BrowserUnavailable;
         await fail(ctx, row, ws, "upload", msg, human);
       } finally {
-        await detach(a);
+        if (a) await detach(a);
       }
       return true;
     }
@@ -385,9 +398,19 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
         message: `check feedback (attempt ${s.feedbackAttempt + 1}/${cfg.retries.feedbackAttempts})`,
       });
 
-      const a = await attach();
+      let a: Attached | null = null;
       try {
-        const page = await snorkelPage(a, pageUrl("home"));
+        // Go back to the FORM, not the home page. Asking for home here navigated the shared
+        // tab away from the submission we had just filled in, so "Check feedback" was being
+        // looked for on /home and could never be found.
+        if (!s.submissionUrl) {
+          throw new FormNotReady(
+            "No submission URL was recorded for this task, so there is no filled form to " +
+              "check feedback on. Re-run the upload stage.",
+          );
+        }
+        a = await attach();
+        const page = await snorkelPage(a, s.submissionUrl);
         const r = await checkFeedback({
           page, runDir,
           pollIntervalSec: cfg.feedback.pollIntervalSec,
@@ -423,10 +446,13 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
           patchState(ws, { lastError: e.message });
           await fail(ctx, row, ws, "feedback", e.message, true); // NEEDS_HUMAN, never a guess
         } else {
-          await fail(ctx, row, ws, "feedback", (e as Error).message, e instanceof SelectorNotFound);
+          const human =
+            e instanceof SelectorNotFound || e instanceof UnconfirmedSelector ||
+            e instanceof BrowserUnavailable || e instanceof FormNotReady;
+          await fail(ctx, row, ws, "feedback", (e as Error).message, human);
         }
       } finally {
-        await detach(a);
+        if (a) await detach(a);
       }
       return true;
     }
@@ -492,14 +518,25 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
     case S.SUBMITTING: {
       const s = st();
       const runDir = runDirFor(cfg, slug, "submit");
-      const a = await attach();
+      let a: Attached | null = null;
       try {
+        if (!s.submissionUrl) {
+          throw new FormNotReady(
+            "No submission URL was recorded, so there is no submission page to click Submit " +
+              "on. Refusing to guess — re-run the upload stage.",
+          );
+        }
+        a = await attach();
+
         // A crash in SUBMITTING means we do not know whether the click landed. Look before
-        // clicking: a duplicate submission cannot be undone.
+        // clicking: a duplicate submission cannot be undone. findSubmitted() now does this
+        // in a throwaway tab, so the submission form below survives the check.
         const existing = await findSubmitted(a, row.task_id, runDir);
         const outcome = existing.submitted
           ? { ...existing, note: `already submitted — did not click again (${existing.note})` }
-          : await clickSubmit(a, await snorkelPage(a, pageUrl("home")), row.task_id, runDir);
+          // The SUBMISSION page — not /home, which is what this used to hand to clickSubmit,
+          // guaranteeing it looked for the Submit button on the wrong page.
+          : await clickSubmit(a, await snorkelPage(a, s.submissionUrl), row.task_id, runDir);
 
         await patchTask(row.task_id, {
           task_status: TaskStatus.AI_REVIEW, // 1 = AI review, per your lifecycle
@@ -513,9 +550,10 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
         });
       } catch (e) {
         // Ambiguous submit state is exactly when a machine must stop and a human must look.
+        // That includes "the Submit selector is still a guess" — see UnconfirmedSelector.
         await fail(ctx, row, ws, "submit", (e as Error).message, true);
       } finally {
-        await detach(a);
+        if (a) await detach(a);
       }
       return true;
     }

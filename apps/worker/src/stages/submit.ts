@@ -7,9 +7,9 @@
  * undone. So we look first.
  */
 import type { Page } from "playwright";
-import { resolve_, exists, pageUrl } from "../browser/selectors.ts";
+import { resolve_, exists, pageUrl, assertConfirmed } from "../browser/selectors.ts";
 import { setCheckbox, snap } from "../browser/actions.ts";
-import { snorkelPage, type Attached } from "../browser/cdp.ts";
+import { withScratchPage, type Attached } from "../browser/cdp.ts";
 
 export interface SubmitOutcome {
   submitted: boolean;
@@ -35,35 +35,49 @@ function idsFromHref(href: string): { submissionId: string | null; assignmentId:
  * reconciliation exact rather than fuzzy.
  */
 export async function findSubmitted(a: Attached, taskId: string, runDir: string): Promise<SubmitOutcome> {
-  const page = await snorkelPage(a, pageUrl("home"));
-  await page.waitForLoadState("domcontentloaded");
+  // In its OWN tab. This used to call snorkelPage(home), which REUSES the live Snorkel tab
+  // and navigates it — so reconciling "have we already submitted?" silently destroyed the
+  // filled submission form we were about to submit, and the Submit button was then looked
+  // for on /home. Reconciliation must be able to look at the home page without touching the
+  // page the caller is working on.
+  return withScratchPage(a, pageUrl("home"), async (page) => {
+    if (!(await exists(page, "home.reviseCard", { tokens: { task_id: taskId }, timeoutMs: 6000 }))) {
+      return { submitted: false, assignmentId: null, submissionId: null, note: "not in the revise list" };
+    }
 
-  if (!(await exists(page, "home.reviseCard", { tokens: { task_id: taskId }, timeoutMs: 6000 }))) {
-    return { submitted: false, assignmentId: null, submissionId: null, note: "not in the revise list" };
-  }
+    const card = await resolve_(page, "home.reviseCard", { tokens: { task_id: taskId } });
+    const href = (await card.getAttribute("href")) ?? "";
+    const { submissionId, assignmentId } = idsFromHref(href);
+    await snap(page, runDir, "reconciled-found");
 
-  const card = await resolve_(page, "home.reviseCard", { tokens: { task_id: taskId } });
-  const href = (await card.getAttribute("href")) ?? "";
-  const { submissionId, assignmentId } = idsFromHref(href);
-  await snap(page, runDir, "reconciled-found");
-
-  return {
-    submitted: true, assignmentId, submissionId,
-    note: `found in the revise list${assignmentId ? ` (assignment ${assignmentId.slice(0, 8)})` : ""}`,
-  };
+    return {
+      submitted: true, assignmentId, submissionId,
+      note: `found in the revise list${assignmentId ? ` (assignment ${assignmentId.slice(0, 8)})` : ""}`,
+    };
+  });
 }
 
 /** Tick "generate rubric automatically". Only ever called after feedback is green. */
 export async function enableRubricGeneration(page: Page, runDir: string): Promise<void> {
+  // Ticking the wrong box can overwrite a rubric, and this selector is still a guess.
+  assertConfirmed("submission.generateRubricCheckbox");
   await setCheckbox(page, "submission.generateRubricCheckbox", true);
   await snap(page, runDir, "rubric-checkbox-ticked");
 }
 
 /**
  * The click. Called only after the human has approved in the dashboard.
+ *
+ * `page` MUST be the submission page. It used to be handed /home.
  */
 export async function clickSubmit(a: Attached, page: Page, taskId: string, runDir: string): Promise<SubmitOutcome> {
-  // Last chance to notice we already did this.
+  // The one irreversible action in the system. Refuse outright while the selector is still
+  // an unverified guess whose fallback candidate is a bare `button[type=submit]` — that can
+  // match a different form's button, click it, and report success.
+  assertConfirmed("submission.submitButton");
+
+  // Last chance to notice we already did this. Runs in its own tab, so `page` still shows
+  // the filled submission form when we come back.
   const before = await findSubmitted(a, taskId, runDir).catch(() => null);
   if (before?.submitted) {
     return { ...before, note: `already submitted — did not click again (${before.note})` };

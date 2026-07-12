@@ -22,11 +22,23 @@ const LAUNCH_HINT =
   "  was STARTED with --remote-debugging-port, and Chrome 136+ refuses that flag on the\n" +
   "  default user-data-dir. (That is a Chrome rule, not a Windows one: it applies here too.)";
 
+/**
+ * Chrome simply is not there. That is a "go and start it" condition, not a broken task —
+ * the pipeline parks at NEEDS_HUMAN instead of burning the task's retries and marking a
+ * perfectly good build FAILED.
+ */
+export class BrowserUnavailable extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BrowserUnavailable";
+  }
+}
+
 export async function attach(cdpUrl = process.env.CDP_URL ?? "http://127.0.0.1:9222"): Promise<Attached> {
   try {
     await fetch(`${cdpUrl}/json/version`, { signal: AbortSignal.timeout(5_000) });
   } catch {
-    throw new Error(`${LAUNCH_HINT}\n  (tried ${cdpUrl})`);
+    throw new BrowserUnavailable(`${LAUNCH_HINT}\n  (tried ${cdpUrl})`);
   }
 
   const browser = await chromium.connectOverCDP(cdpUrl);
@@ -40,6 +52,10 @@ export async function attach(cdpUrl = process.env.CDP_URL ?? "http://127.0.0.1:9
 /**
  * Reuse the existing Snorkel tab when there is one. Opening a fresh tab per stage would
  * pile up windows across a long run, and the user is watching this browser.
+ *
+ * ⚠️  This NAVIGATES the shared tab if it is not already on `url`. That is fine when `url`
+ * is where you want to end up, and catastrophic when some other stage is mid-way through a
+ * form on that tab. If you only need to LOOK at another page, use withScratchPage().
  */
 export async function snorkelPage(a: Attached, url: string): Promise<Page> {
   const existing = a.context.pages().find((p) => p.url().startsWith("https://experts.snorkel-ai.com"));
@@ -48,6 +64,28 @@ export async function snorkelPage(a: Attached, url: string): Promise<Page> {
     await page.goto(url, { waitUntil: "domcontentloaded" });
   }
   return page;
+}
+
+/**
+ * Look at a page in a throwaway tab, then close it — leaving the caller's tab untouched.
+ *
+ * This exists because reconciliation ("has this task already been submitted?") has to read
+ * /home while the submission form sits filled-in on the main tab. Doing that through
+ * snorkelPage() navigated the form away, which is why the submit stage was looking for the
+ * Submit button on the home page.
+ */
+export async function withScratchPage<T>(
+  a: Attached,
+  url: string,
+  fn: (page: Page) => Promise<T>,
+): Promise<T> {
+  const page = await a.context.newPage();
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    return await fn(page);
+  } finally {
+    await page.close().catch(() => {});
+  }
 }
 
 /**

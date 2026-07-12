@@ -21,6 +21,14 @@ export interface LocalState {
   feedbackAttempt: number;  // Snorkel Check-feedback fix attempts
   zipPath: string | null;
   explanations: Explanations | null;
+  /**
+   * The URL of the submission page whose form we filled.
+   *
+   * Without this, the feedback and submit stages had nowhere to go back TO: they asked for
+   * the home page, which navigated the shared tab away from the filled form. Snorkel
+   * autosaves the submission, so returning to this URL restores it.
+   */
+  submissionUrl: string | null;
   /** Set while parked in CHECKING_FEEDBACK so a restart knows how long it has waited. */
   feedbackStartedAt: string | null;
   lastError: string | null;

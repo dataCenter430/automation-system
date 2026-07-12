@@ -45,6 +45,42 @@ export function pageUrl(key: string): string {
   return u;
 }
 
+/**
+ * A selector that is still a guess was about to be used to DO something.
+ *
+ * `"$unconfirmed": true` in the config means "nobody has ever watched this resolve against
+ * the real page". Two elements carry it, and they are the two that matter most: the Submit
+ * button (irreversible) and the generate-rubric checkbox (can overwrite a rubric). Both have
+ * generic fallback candidates — `button[type=submit]` will happily match some OTHER form's
+ * button and report success.
+ *
+ * The flag existed, but nothing checked it at runtime: `isUnconfirmed()` was imported only
+ * by the recorder CLI. So the pipeline would have clicked a placeholder Submit for real.
+ * Now it refuses, and the task parks at NEEDS_HUMAN until someone pins the selector.
+ */
+export class UnconfirmedSelector extends Error {
+  key: string;
+  constructor(key: string) {
+    super(
+      `Refusing to act on "${key}": it is still marked "$unconfirmed" in ` +
+        `config/selectors.snorkel.json — an educated guess that has never been seen to ` +
+        `resolve against the real page.\n\n` +
+        `This guard exists because the fallback candidates are generic enough to match the ` +
+        `WRONG element and still look like they worked.\n\n` +
+        `Pin it, then delete the "$unconfirmed" flag:\n` +
+        `  bash scripts/launch-chrome.sh          # open the submission page\n` +
+        `  npm run selectors:record -- --pick     # click the element; paste the candidates`,
+    );
+    this.name = "UnconfirmedSelector";
+    this.key = key;
+  }
+}
+
+/** Call before any selector is used to CLICK, TICK or SUBMIT — never for a read. */
+export function assertConfirmed(key: string): void {
+  if (isUnconfirmed(key)) throw new UnconfirmedSelector(key);
+}
+
 export class SelectorNotFound extends Error {
   key: string;
   constructor(key: string, description: string | undefined, tried: string[]) {

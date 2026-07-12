@@ -22,6 +22,8 @@ import {
   CRASHED_MIDFLIGHT, PipelineState as S, stateName, isTerminal,
 } from "../../../packages/shared/src/status.ts";
 import { RateLimited } from "./claude/errors.ts";
+import { sessionExists } from "./claude/session.ts";
+import { resolve } from "node:path";
 import { acquire, release, AlreadyRunning } from "./lock.ts";
 import type { TerminusRow } from "../../../packages/shared/src/types.ts";
 
@@ -68,8 +70,20 @@ async function sweep(): Promise<TerminusRow[]> {
   if (rows.length) {
     ctx.log(`recovering ${rows.length} interrupted task(s):`);
     for (const r of rows) {
-      ctx.log(`  ${r.slug ?? r.task_id} — was in ${stateName(r.pipeline_state)}` +
-              (r.claude_session_id ? ` · session ${r.claude_session_id.slice(0, 8)} will be resumed, not rebuilt` : ""));
+      // Only claim the session will be resumed if its transcript is actually here. A
+      // workspace that came from another machine carries a session id whose conversation
+      // did not come with it, and promising a resume we cannot deliver is how you end up
+      // trusting a STUDY_DONE marker written by a session that no longer exists.
+      const ws = resolve(cfg.paths.workspace, r.slug ?? "");
+      const resumable = sessionExists(ws, r.claude_session_id);
+      ctx.log(
+        `  ${r.slug ?? r.task_id} — was in ${stateName(r.pipeline_state)}` +
+          (r.claude_session_id
+            ? resumable
+              ? ` · session ${r.claude_session_id.slice(0, 8)} will be resumed, not rebuilt`
+              : ` · session ${r.claude_session_id.slice(0, 8)} is not on this machine — will rebuild from a fresh session`
+            : ""),
+      );
     }
   }
   return rows;
@@ -105,8 +119,15 @@ async function main(): Promise<void> {
     }
 
     // Keep driving anything already underway (this is what un-parks CHECKING_FEEDBACK).
+    //
+    // FEEDBACK_FAILED belongs here for exactly the same reason VERIFY_FAILED does: it is a
+    // decision state, not a resting state — it exists only to route to the fixer or to give
+    // up. Normally the inner while-loop in step() carries a task straight through it, so
+    // nobody noticed it was missing from both this list and CRASHED_MIDFLIGHT. But a worker
+    // that died in the instant between committing FEEDBACK_FAILED and the next advance()
+    // left the task stranded forever, with nothing on any sweep that would ever look at it.
     for (const r of await findInterrupted([
-      S.BUILT, S.VERIFY_FAILED, S.VERIFIED, S.ZIPPED, S.EXPLAINED,
+      S.BUILT, S.VERIFY_FAILED, S.VERIFIED, S.ZIPPED, S.EXPLAINED, S.FEEDBACK_FAILED,
       ...CRASHED_MIDFLIGHT,
     ])) {
       if (inFlight.size >= cfg.worker.maxParallelTasks) break;

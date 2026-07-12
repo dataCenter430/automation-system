@@ -19,6 +19,8 @@ export class AttestationRefused extends Error {}
 export interface UploadResult {
   page: Page;
   submissionUid: string | null;
+  /** Where this form lives, so the feedback and submit stages can come back to it. */
+  submissionUrl: string;
   instructionAudit: InstructionAudit;
 }
 
@@ -73,17 +75,28 @@ export async function fillSubmissionForm(args: {
   await setCheckbox(page, "submission.promptCheckbox", true);
 
   // The readiness oracle: Snorkel itself decides when the form is complete.
+  //
+  // Poll the locator we RESOLVED FROM CONFIG, rather than a second, hardcoded copy of the
+  // selector. The hardcoded `document.querySelector('[data-testid="field-feedbackbutton-
+  // fast_static_checks"] button')` that used to live here defeated the entire point of the
+  // candidate-fallback design: if the testid changed and checkFeedbackButton resolved via
+  // its role-based fallback, this querySelector returned null forever, timed out, and threw
+  // FormNotReady — reporting "the form did not accept our input" when the form was fine.
+  // Polling the locator also survives a React re-render, which an elementHandle would not.
   const button = await resolve_(page, "submission.checkFeedbackButton");
   try {
     await button.waitFor({ state: "visible", timeout: 5_000 });
-    await page.waitForFunction(
-      (sel) => {
-        const b = document.querySelector(sel) as HTMLButtonElement | null;
-        return !!b && !b.disabled;
-      },
-      '[data-testid="field-feedbackbutton-fast_static_checks"] button',
-      { timeout: 20_000 },
-    );
+
+    const deadline = Date.now() + 20_000;
+    let enabled = false;
+    while (Date.now() < deadline) {
+      if (!(await button.isDisabled().catch(() => true))) {
+        enabled = true;
+        break;
+      }
+      await page.waitForTimeout(500);
+    }
+    if (!enabled) throw new Error("check-feedback button never became enabled");
   } catch {
     // Don't retry blindly — read Snorkel's own list of what didn't take.
     let missing = "";
@@ -110,5 +123,5 @@ export async function fillSubmissionForm(args: {
     submissionUid = (await (await resolve_(page, "submission.uid", { timeoutMs: 3000 })).innerText()).trim();
   } catch { /* header UID not always rendered */ }
 
-  return { page, submissionUid, instructionAudit: audit };
+  return { page, submissionUid, submissionUrl: page.url(), instructionAudit: audit };
 }

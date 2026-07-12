@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 import { db } from "../../../../../packages/shared/src/supabase.ts";
 import { PipelineState, TaskStatus } from "../../../../../packages/shared/src/status.ts";
 import { REPO_ROOT } from "../../../../../packages/shared/src/paths.ts";
+import { assertValidSlug } from "../../../../../packages/shared/src/slug.ts";
+import { toTaskToml } from "../../../../../packages/shared/src/taxonomy.ts";
 
 export const runtime = "nodejs"; // reads config/owners.json off disk
 
@@ -64,6 +66,52 @@ export async function POST(req: Request) {
   }
   if (!body.parsed || !body.slug) {
     return NextResponse.json({ error: "Parse the task text before adding it." }, { status: 400 });
+  }
+
+  // ---- The slug is a primary key in everything except the database ---------
+  //
+  // The slug names the workspace, the Claude session that lives in it, runs/<slug>/,
+  // Working/<slug>.zip and the docker image. Two tasks sharing one is not a cosmetic clash:
+  // the second task would resume the first one's Claude conversation, or skip its build and
+  // ship the first one's task tree under its own name. The worker now refuses to proceed in
+  // that situation, but refusing at the door is better than parking a task at NEEDS_HUMAN
+  // after the human has already pressed Start Build.
+  //
+  // assertValidSlug() has existed in packages/shared since the beginning and was called from
+  // nowhere. The slug field in the dashboard is free text.
+  try {
+    assertValidSlug(body.slug);
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+  }
+
+  const { data: clash } = await db()
+    .from("terminus")
+    .select("task_id, title")
+    .eq("slug", body.slug)
+    .maybeSingle();
+
+  if (clash) {
+    return NextResponse.json(
+      {
+        error:
+          `The slug "${body.slug}" is already taken by task ${String(clash.task_id).slice(0, 8)} ` +
+          `("${clash.title}").\n\n` +
+          `The slug is the workspace name, the zip name and the Claude session's home — two ` +
+          `tasks cannot share one. Edit the slug and try again.`,
+      },
+      { status: 409 },
+    );
+  }
+
+  // The taxonomy is re-checked SERVER-side, not just in the browser preview. The preview's
+  // Start Build button is disabled on a blocked category, but a stale tab or a plain curl
+  // bypasses that entirely — and the next thing to catch it would be build.ts, by which time
+  // a Claude study turn has already been paid for.
+  try {
+    toTaskToml(body.parsed);
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 422 });
   }
 
   const owner = activeOwner();

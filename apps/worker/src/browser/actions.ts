@@ -12,7 +12,15 @@ import { resolve_ } from "./selectors.ts";
 
 /* ------------------------------------------------------------------ snap */
 
-let snapCounter = 0;
+/**
+ * Per-run-directory, NOT global.
+ *
+ * A single module-level counter is shared by every task in the process, so with eight tasks
+ * running browser stages at once, runs/<slugA>/upload-0/ got 03, 07, 15 while runs/<slugB>/
+ * got 04, 09, 12. The docstring below calls this "the only forensic trail we get" — a trail
+ * whose numbering is interleaved with seven other tasks is not one.
+ */
+const snapCounters = new Map<string, number>();
 
 /**
  * Screenshot + DOM after every step, into runs/<slug>/.
@@ -21,7 +29,9 @@ let snapCounter = 0;
  */
 export async function snap(page: Page, runDir: string, label: string): Promise<void> {
   mkdirSync(runDir, { recursive: true });
-  const n = String(++snapCounter).padStart(2, "0");
+  const next = (snapCounters.get(runDir) ?? 0) + 1;
+  snapCounters.set(runDir, next);
+  const n = String(next).padStart(3, "0"); // 3 digits: a long feedback poll snaps a lot
   const base = join(runDir, `${n}-${label.replace(/[^a-z0-9-]+/gi, "-")}`);
   try {
     await page.screenshot({ path: `${base}.png`, fullPage: true });

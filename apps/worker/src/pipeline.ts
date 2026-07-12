@@ -114,8 +114,39 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
   const slug = row.slug!;
   const ws = workspaceFor(cfg, slug);
 
+  // ---- The workspace must belong to THIS task -------------------------------
+  //
+  // Every per-task resource in this system is keyed by SLUG, not task_id: the workspace, the
+  // .pipeline/state.json inside it (which holds claude_session_id), runs/<slug>/,
+  // Working/<slug>.zip, even the docker image name. But nothing enforced that a slug belongs
+  // to only one task. slugify() is deterministic from the title and truncates to seven words,
+  // and the dashboard lets the slug be hand-edited — so two tasks colliding on a slug is a
+  // typo away, not a freak event.
+  //
+  // The consequence is not a race, it is worse: it needs no timing at all. Task B, finding
+  // A's state.json already in the shared workspace, would read A's claudeSessionId and resume
+  // A's CONVERSATION with B's prompt — or, if A had already finished, buildAlreadyComplete()
+  // would return true, B would skip its build entirely, and A's task tree would be zipped and
+  // uploaded as B.
+  //
+  // So: the state file names its owner, and we check. Two tasks, one slug, stops here.
+  const existing = readState(ws);
+  if (existing && existing.taskId !== row.task_id) {
+    await fail(
+      ctx, row, ws, "build",
+      `Slug collision. workspace/${slug} already belongs to task ${existing.taskId}, but this ` +
+        `is task ${row.task_id}.\n\n` +
+        `Two tasks cannot share a workspace: it holds the Claude session id, the build, and ` +
+        `the zip. Continuing would have resumed the other task's conversation, or shipped its ` +
+        `task tree under this one's name.\n\n` +
+        `Give this task a distinct slug in the dashboard and retry.`,
+      true, // NEEDS_HUMAN — a human must pick the new slug; the machine must not guess one.
+    );
+    return true;
+  }
+
   // Bootstrap local state on first entry (or if the workspace was wiped).
-  if (!readState(ws)) {
+  if (!existing) {
     mkdirSync(ws, { recursive: true });
     writeState(ws, {
       taskId: row.task_id, slug,

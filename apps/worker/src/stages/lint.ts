@@ -11,6 +11,7 @@ import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { unchangedFromSkeleton } from "./skeleton.ts";
+import { blockedCategories } from "../../../../packages/shared/src/taxonomy.ts";
 
 export type Severity = "blocking" | "warning";
 
@@ -49,7 +50,10 @@ const CATEGORIES = new Set([
  * DRIFTING into a blocked category during the build. Without it, Claude could quietly write
  * `category = "debugging"` and every downstream check would wave it through.
  */
-const BLOCKED_CATEGORIES = new Set(["software-engineering", "debugging", "data-processing"]);
+// Read from config/taxonomy.json, NOT a second hardcoded copy. Two lists of the same thing
+// drift, and the one that drifts silently here is the gate — the last check standing between
+// a blocked category and a submitted zip.
+const BLOCKED_CATEGORIES = new Set(blockedCategories());
 const SUBCATEGORIES = new Set([
   "long_context", "tool_specific", "api_integration", "db_interaction", "ui_building",
 ]);

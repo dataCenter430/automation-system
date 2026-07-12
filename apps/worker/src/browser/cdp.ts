@@ -45,24 +45,49 @@ export async function attach(cdpUrl = process.env.CDP_URL ?? "http://127.0.0.1:9
   const context = browser.contexts()[0];
   if (!context) throw new Error("Chrome exposed CDP but has no browser context. Open a window and retry.");
 
-  const page = context.pages().find((p) => p.url().includes("snorkel")) ?? await context.newPage();
+  // Do NOT open a tab here. Stages attach and detach around every state, so creating a page
+  // per attach leaks a tab per transition — and with eight tasks that is a lot of tabs in a
+  // browser the human is also looking at. Reuse whatever is open; stages that need a tab of
+  // their own call newTab().
+  const page = context.pages().find((p) => p.url().includes("snorkel")) ?? context.pages()[0]!;
   return { browser, context, page };
 }
 
 /**
- * Reuse the existing Snorkel tab when there is one. Opening a fresh tab per stage would
- * pile up windows across a long run, and the user is watching this browser.
+ * A tab that belongs to this task and nobody else.
  *
- * ⚠️  This NAVIGATES the shared tab if it is not already on `url`. That is fine when `url`
- * is where you want to end up, and catastrophic when some other stage is mid-way through a
- * form on that tab. If you only need to LOOK at another page, use withScratchPage().
+ * Used by the upload stage: filling a submission takes minutes, and a tab that another task
+ * might navigate out from under it is not a place to do that.
+ */
+export async function newTab(a: Attached, url: string): Promise<Page> {
+  const page = await a.context.newPage();
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  return page;
+}
+
+/**
+ * The tab for THIS url — never somebody else's tab.
+ *
+ * This replaced a function that found "the first Snorkel tab" and navigated it wherever the
+ * caller wanted to go. With one task in flight that is merely untidy. With eight it is a
+ * wrong-submission generator:
+ *
+ *   Task A is in UPLOADING, its zip attached and its three explanations typed into the form.
+ *   Task B enters UPLOADING, asks for /home, finds A's tab (it is a Snorkel tab), and
+ *   navigates it — destroying A's form. B fills its own submission into that same tab. A's
+ *   remaining calls now act on B's page: A records B's submission URL, polls B's feedback for
+ *   twenty minutes, and finally clicks Submit on B's submission.
+ *
+ * That is the double-submit lock.ts was written to prevent, arriving through a door nobody
+ * had locked. So: reuse a tab only if it is ALREADY at this url, and otherwise open a new
+ * one. A tab is never navigated away from where another task left it.
  */
 export async function snorkelPage(a: Attached, url: string): Promise<Page> {
-  const existing = a.context.pages().find((p) => p.url().startsWith("https://experts.snorkel-ai.com"));
-  const page = existing ?? await a.context.newPage();
-  if (!page.url().startsWith(url)) {
-    await page.goto(url, { waitUntil: "domcontentloaded" });
-  }
+  const already = a.context.pages().find((p) => !p.isClosed() && p.url().startsWith(url));
+  if (already) return already;
+
+  const page = await a.context.newPage();
+  await page.goto(url, { waitUntil: "domcontentloaded" });
   return page;
 }
 

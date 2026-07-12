@@ -38,6 +38,21 @@ export interface TaskToml {
 export class TaxonomyError extends Error {}
 
 /**
+ * The categories Snorkel is not currently accepting, read from config/taxonomy.json.
+ *
+ * This is exported so the GATE can ask for the list rather than keep its own copy. lint.ts
+ * had its own hardcoded `new Set(["software-engineering", "debugging", "data-processing"])`,
+ * which is fine right up until Snorkel blocks a fourth category: someone updates
+ * taxonomy.json, the parse step starts rejecting it, and the gate — the last line of defence,
+ * the one that checks the task.toml Claude actually wrote — goes on waving it through,
+ * because nobody remembered there were two lists.
+ */
+export function blockedCategories(): string[] {
+  const t = load();
+  return ((t.category.$blocked as { categories?: string[] } | undefined)?.categories) ?? [];
+}
+
+/**
  * Turn the parsed blob's human labels into task.toml enum values.
  *
  * Unknown labels throw rather than silently passing through: an invalid enum in

@@ -9,7 +9,7 @@
 import type { Page } from "playwright";
 import { resolve_, pageUrl } from "../browser/selectors.ts";
 import { attachFile, expandIfCollapsed, fillReliably, setCheckbox, snap } from "../browser/actions.ts";
-import { snorkelPage, type Attached } from "../browser/cdp.ts";
+import { newTab, type Attached } from "../browser/cdp.ts";
 import { lintInstruction, type InstructionAudit } from "./instruction-audit.ts";
 import type { Explanations } from "./explain.ts";
 
@@ -25,7 +25,11 @@ export interface UploadResult {
 }
 
 export async function openNewSubmission(a: Attached, runDir: string): Promise<Page> {
-  const page = await snorkelPage(a, pageUrl("home"));
+  // A tab of our OWN. Filling this form takes minutes — a zip upload and three explanations —
+  // and with eight tasks in flight a shared tab means some other task's upload navigates this
+  // one away mid-fill, and we end up typing our submission into theirs. This tab belongs to
+  // this task until the submission is done with it.
+  const page = await newTab(a, pageUrl("home"));
   await page.waitForLoadState("domcontentloaded");
   await snap(page, runDir, "home");
 

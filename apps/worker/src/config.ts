@@ -13,6 +13,8 @@ export interface Config {
   docker: {
     cpus: number; memoryMb: number; buildTimeoutSec: number;
     solveTimeoutSec: number; testTimeoutSec: number;
+    /** How many gates may run at once. cpus * this must not exceed the machine's cores. */
+    maxConcurrentGates: number;
   };
   feedback: { pollIntervalSec: number; timeoutMin: number };
   worker: { pollIntervalSec: number; maxParallelTasks: number };

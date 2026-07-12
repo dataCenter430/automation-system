@@ -15,8 +15,9 @@
   },
 
   "claude": {
-    "$comment": "Auth comes from the logged-in Claude Code CLI (~/.claude), NOT an API key. The Agent SDK spawns that CLI, so the worker must run as the OS user that is signed in. maxConcurrent guards the subscription rate limit.",
-    "maxConcurrent": 1,
+    "$comment": "Auth comes from the logged-in Claude Code CLI (~/.claude), NOT an API key. The Agent SDK spawns that CLI, so the worker must run as the OS user that is signed in.",
+    "$maxConcurrent": "How many Claude sessions may run at once. Build turns are network-bound, so several overlap happily on a 4-core box — this protects the SUBSCRIPTION rate limit, not the CPU. It was declared here from the start and read by NO code until claude/session.ts started enforcing it.",
+    "maxConcurrent": 6,
     "$buildTimeout": "A long_context task must ship >= 50k tokens of real prose (playbook §8.6). Claude writes that corpus by hand, which is slow: the first build under the SDK engine spent 45 minutes producing a 222 KB dossier and was killed before it could build the task on top of it. 45 was never enough for this category.",
     "studyTimeoutMin": 15,
     "buildTimeoutMin": 120,
@@ -28,8 +29,10 @@
 
   "docker": {
     "$comment": "Mirrors task.toml [environment]; --network none reproduces allow_internet=false at test time.",
+    "$maxConcurrentGates": "cpus * maxConcurrentGates must not exceed the machine's cores. This box has 4, so 2 gates x 2 cpus fits exactly. Raise BOTH together only on a bigger machine: over-subscribing here does not make anything faster, it makes every gate time out at once and records real task failures that were only a scheduling mistake.",
     "cpus": 2,
     "memoryMb": 4096,
+    "maxConcurrentGates": 2,
     "buildTimeoutSec": 1200,
     "solveTimeoutSec": 900,
     "testTimeoutSec": 600
@@ -42,8 +45,9 @@
   },
 
   "worker": {
+    "$maxParallelTasks": "Tasks in flight at once. This is NOT the Claude limit or the Docker limit — those queue separately (claude.maxConcurrent, docker.maxConcurrentGates), because a build turn waits on the network while a gate eats two cores. 8 tasks / 6 Claude sessions / 2 gates.",
     "pollIntervalSec": 5,
-    "maxParallelTasks": 3
+    "maxParallelTasks": 8
   },
 
   "gate": {

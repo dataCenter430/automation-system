@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { SessionView } from "./SessionView";
 
 /**
  * The queue. Two buttons matter:
@@ -35,8 +36,12 @@ const STATE: Record<number, { name: string; color: string; hint?: string }> = {
 
 const TASK_STATUS = ["Working on", "AI review", "Human review", "Accepted"];
 
+/** Stages where a Claude session is actively running — so the session view keeps polling. */
+const CLAUDE_LIVE = new Set([10, 45, 55, 69]);
+
 export function Queue({ tasks, events, onChanged }: { tasks: any[]; events: any[]; onChanged: () => void }) {
   const [open, setOpen] = useState<string | null>(null);
+  const [session, setSession] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   async function act(taskId: string, action: string) {
@@ -68,6 +73,7 @@ export function Queue({ tasks, events, onChanged }: { tasks: any[]; events: any[
         const st = STATE[t.pipeline_state] ?? { name: `STATE ${t.pipeline_state}`, color: "var(--dim)" };
         const mine = events.filter((e) => e.task_id === t.task_id).slice(0, 6);
         const isOpen = open === t.task_id;
+        const isSession = session === t.task_id;
         const failed = t.pipeline_state === -1 || t.pipeline_state === -2;
 
         return (
@@ -128,12 +134,34 @@ export function Queue({ tasks, events, onChanged }: { tasks: any[]; events: any[
                     Retry
                   </button>
                 )}
+                {/* Watch Claude work. This is what replaced the VS Code window — and unlike
+                    the window, you can have every concurrent build open at once. */}
+                {t.claude_session_id && (
+                  <button
+                    style={{
+                      ...B,
+                      color: isSession ? "#0b0e14" : "var(--run)",
+                      background: isSession ? "var(--run)" : "transparent",
+                      borderColor: "var(--run)",
+                      fontWeight: 600,
+                    }}
+                    onClick={() => setSession(isSession ? null : t.task_id)}
+                  >
+                    {isSession ? "Hide session" : "Session"}
+                  </button>
+                )}
                 <button style={{ ...B, color: "var(--dim)", background: "transparent" }}
                         onClick={() => setOpen(isOpen ? null : t.task_id)}>
                   {isOpen ? "Hide" : "Log"}
                 </button>
               </div>
             </div>
+
+            {isSession && (
+              <div style={{ marginTop: 11, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
+                <SessionView taskId={t.task_id} live={CLAUDE_LIVE.has(t.pipeline_state)} />
+              </div>
+            )}
 
             {t.last_error && failed && (
               <pre style={{

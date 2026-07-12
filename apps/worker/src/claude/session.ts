@@ -33,6 +33,24 @@ import { join, resolve } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { RateLimited, looksRateLimited } from "./errors.ts";
 import { judge } from "./guard.ts";
+import { Semaphore } from "../util/semaphore.ts";
+import { loadConfig } from "../config.ts";
+
+/**
+ * How many Claude sessions may run at once.
+ *
+ * `claude.maxConcurrent` has been in config/pipeline.json since the beginning, described as
+ * the guard on the subscription rate limit — and no code has ever read it. This is where it
+ * finally does something: every turn, from every stage, queues here. Build turns are long
+ * (up to two hours for a long_context corpus), so this is the knob that decides whether
+ * eight parallel tasks means eight parallel Claude sessions or a polite queue behind N.
+ */
+const claudeSlots = new Semaphore(Math.max(1, loadConfig().claude.maxConcurrent));
+
+/** For the worker's status line: how loaded is Claude right now? */
+export function claudeLoad(): { running: number; queued: number } {
+  return { running: claudeSlots.inUse, queued: claudeSlots.queued };
+}
 
 /**
  * Is this session actually on THIS machine?
@@ -136,6 +154,18 @@ function describeToolUse(b: any): string {
  * ClaudeTurnFailed (a real failure the pipeline should record).
  */
 export async function runTurn(args: RunTurnArgs): Promise<TurnResult> {
+  // Queue behind claude.maxConcurrent. Waiting here is cheap and honest; the alternative is
+  // firing eight simultaneous sessions at the subscription and taking a rate limit that
+  // looks, from the dashboard, like eight tasks failing at once.
+  if (claudeSlots.wouldBlock) {
+    await args.onProgress?.(
+      `waiting for a Claude slot (${claudeSlots.inUse} sessions running, ${claudeSlots.queued} ahead)`,
+    );
+  }
+  return claudeSlots.run(() => runTurnInner(args));
+}
+
+async function runTurnInner(args: RunTurnArgs): Promise<TurnResult> {
   const started = Date.now();
   const heartbeatMs = (args.heartbeatSec ?? 20) * 1000;
   const label = args.label ?? "working";

@@ -30,11 +30,27 @@ import { findSubmitted, clickSubmit, enableRubricGeneration } from "./stages/sub
 import { attach, detach, snorkelPage, BrowserUnavailable, type Attached } from "./browser/cdp.ts";
 import { SelectorNotFound, UnconfirmedSelector } from "./browser/selectors.ts";
 import { RateLimited } from "./claude/errors.ts";
+import { Semaphore } from "./util/semaphore.ts";
 import type { Config } from "./config.ts";
 
 export interface Ctx {
   cfg: Config;
   log: (msg: string) => void;
+}
+
+/**
+ * The Docker gate is the one genuinely CPU-hungry stage: an image build plus two container
+ * runs, each handed docker.cpus (2) and docker.memoryMb (4096). On a 4-core box two of those
+ * already saturate it. Running eight would not make anything faster — it would make every
+ * gate time out at once, and the pipeline would record eight task failures that were really
+ * one scheduling mistake.
+ *
+ * Claude turns queue separately (see claude/session.ts). Tasks overlap; gates take turns.
+ */
+let gateSlots: Semaphore | null = null;
+function dockerGate(cfg: Config): Semaphore {
+  if (!gateSlots) gateSlots = new Semaphore(Math.max(1, cfg.docker.maxConcurrentGates));
+  return gateSlots;
 }
 
 const toParsed = (r: TerminusRow): ParsedTask => ({
@@ -205,16 +221,27 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
         attempt, message: `docker gate (attempt ${attempt + 1}/${cfg.retries.verifyAttempts})`,
       });
 
-      const r = await verifyTask({
-        taskDir: ws,
-        slug,
-        runDir: runDirFor(cfg, slug, `verify-${attempt}`),
-        cpus: cfg.docker.cpus,
-        memoryMb: cfg.docker.memoryMb,
-        buildTimeoutSec: cfg.docker.buildTimeoutSec,
-        solveTimeoutSec: cfg.docker.solveTimeoutSec,
-        testTimeoutSec: cfg.docker.testTimeoutSec,
-      });
+      const gate = dockerGate(cfg);
+      if (gate.wouldBlock) {
+        ctx.log(`${slug}  waiting for a docker gate (${gate.inUse} running, ${gate.queued} ahead)`);
+        await emitEvent({
+          task_id: row.task_id, stage: "verify", status: "heartbeat", attempt,
+          message: `waiting for a docker gate (${gate.inUse} running, ${gate.queued} ahead)`,
+        });
+      }
+
+      const r = await gate.run(() =>
+        verifyTask({
+          taskDir: ws,
+          slug,
+          runDir: runDirFor(cfg, slug, `verify-${attempt}`),
+          cpus: cfg.docker.cpus,
+          memoryMb: cfg.docker.memoryMb,
+          buildTimeoutSec: cfg.docker.buildTimeoutSec,
+          solveTimeoutSec: cfg.docker.solveTimeoutSec,
+          testTimeoutSec: cfg.docker.testTimeoutSec,
+        }),
+      );
 
       const detail = {
         oracle_reward: r.oracleReward,

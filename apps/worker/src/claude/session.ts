@@ -100,9 +100,33 @@ function textOf(content: unknown): string {
     .join("");
 }
 
-function countToolUses(content: unknown): number {
-  if (!Array.isArray(content)) return 0;
-  return content.filter((b: any) => b?.type === "tool_use").length;
+/**
+ * A one-line, human-readable description of a tool call, for the dashboard's event log.
+ *
+ * This is the whole answer to "I can't see what it's doing". The old VS Code path gave you
+ * a window to watch; the SDK is headless, so the event stream has to carry that visibility
+ * instead. A heartbeat that only says "building · 8m · 4 tool calls" is not visibility — the
+ * first build to run under this engine spent 45 minutes in a Write/Edit loop on one file and
+ * nothing in the log said so until it timed out.
+ */
+function describeToolUse(b: any): string {
+  const i = b.input ?? {};
+  const short = (p: unknown) => String(p ?? "").split("/").slice(-2).join("/");
+  switch (b.name) {
+    case "Bash":
+      return `$ ${String(i.command ?? "").replace(/\s+/g, " ").slice(0, 90)}`;
+    case "Write":
+    case "Edit":
+    case "MultiEdit":
+      return `${b.name} ${short(i.file_path)}`;
+    case "Read":
+      return `Read ${short(i.file_path)}`;
+    case "Glob":
+    case "Grep":
+      return `${b.name} ${String(i.pattern ?? "").slice(0, 50)}`;
+    default:
+      return b.name;
+  }
 }
 
 /**
@@ -202,7 +226,14 @@ export async function runTurn(args: RunTurnArgs): Promise<TurnResult> {
       }
 
       if (m.type === "assistant") {
-        toolCalls += countToolUses(m.message?.content);
+        const blocks = Array.isArray(m.message?.content) ? m.message.content : [];
+        for (const b of blocks) {
+          if (b?.type !== "tool_use") continue;
+          toolCalls += 1;
+          // Stream every tool call so the dashboard log shows what Claude is actually doing,
+          // as it does it. This is the replacement for watching the VS Code window.
+          await args.onProgress?.(`⚙ ${toolCalls}. ${describeToolUse(b)}`);
+        }
         continue;
       }
 

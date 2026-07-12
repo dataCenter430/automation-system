@@ -17,9 +17,10 @@
   "claude": {
     "$comment": "Auth comes from the logged-in Claude Code CLI (~/.claude), NOT an API key. The Agent SDK spawns that CLI, so the worker must run as the OS user that is signed in. maxConcurrent guards the subscription rate limit.",
     "maxConcurrent": 1,
+    "$buildTimeout": "A long_context task must ship >= 50k tokens of real prose (playbook §8.6). Claude writes that corpus by hand, which is slow: the first build under the SDK engine spent 45 minutes producing a 222 KB dossier and was killed before it could build the task on top of it. 45 was never enough for this category.",
     "studyTimeoutMin": 15,
-    "buildTimeoutMin": 45,
-    "fixTimeoutMin": 30,
+    "buildTimeoutMin": 120,
+    "fixTimeoutMin": 45,
     "explainTimeoutMin": 15,
     "probeTimeoutMin": 30,
     "rateLimitBackoffSec": 120

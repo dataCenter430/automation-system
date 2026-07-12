@@ -93,12 +93,16 @@ export async function GET(_req: Request, ctx: { params: Promise<{ taskId: string
   const turns: Turn[] = [];
   let cost = 0;
   let numTurns = 0;
+  // Which model ACTUALLY ran this build. Not what we asked for — what answered. A pinned
+  // model that silently stops resolving should be visible, not assumed.
+  const models = new Set<string>();
 
   for (const line of readFileSync(file, "utf8").split("\n")) {
     if (!line.trim()) continue;
     let m: any;
     try { m = JSON.parse(line); } catch { continue; }
     const at = m.timestamp ?? null;
+    if (m.message?.model) models.add(String(m.message.model));
 
     // What WE sent — this is the prompt the old VS Code panel showed you being typed in.
     if (m.type === "user" && m.message?.content) {
@@ -150,5 +154,6 @@ export async function GET(_req: Request, ctx: { params: Promise<{ taskId: string
     transcript: file,
     bytes: statSync(file).size,
     costUsd: cost,
+    models: [...models],
   });
 }

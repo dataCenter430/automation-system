@@ -179,6 +179,7 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
           workspace: ws,
           resuming,
           sessionId: st().claudeSessionId,
+          openEditor: cfg.worker.openEditor,
           studyTimeoutMin: cfg.claude.studyTimeoutMin,
           buildTimeoutMin: cfg.claude.buildTimeoutMin,
           onSessionId: async (id) => {

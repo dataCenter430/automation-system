@@ -47,6 +47,12 @@ import { loadConfig } from "../config.ts";
  */
 const claudeSlots = new Semaphore(Math.max(1, loadConfig().claude.maxConcurrent));
 
+/**
+ * The model every build runs on. `null` means "whatever the CLI defaults to" — which is what
+ * we had, and it is not a choice, it is an accident waiting to change under you.
+ */
+const cfgModel: string | null = loadConfig().claude.model ?? null;
+
 /** For the worker's status line: how loaded is Claude right now? */
 export function claudeLoad(): { running: number; queued: number } {
   return { running: claudeSlots.inUse, queued: claudeSlots.queued };
@@ -90,6 +96,14 @@ export interface TurnResult {
   durationSec: number;
   /** Tool calls the guard refused. Empty on a normal build; non-empty is worth reading. */
   denials: string[];
+  /**
+   * The model that ACTUALLY ran this turn, as reported by the SDK — not the one we asked
+   * for. Before this existed, nobody knew: the first real build ran on
+   * claude-opus-4-5-20251101 purely because that was the CLI's default, and there was no
+   * way to find that out short of grepping the transcript. If a task is going to carry your
+   * name to Snorkel, you should be able to see which model built it.
+   */
+  model: string | null;
 }
 
 export interface RunTurnArgs {
@@ -187,6 +201,7 @@ async function runTurnInner(args: RunTurnArgs): Promise<TurnResult> {
   let lastActivity = Date.now();
   let finalText = "";
   let stderrTail = "";
+  let model: string | null = null;
   const denials: string[] = [];
 
   // The SDK has no timeout of its own — a wedged turn would hang the worker forever.
@@ -237,6 +252,10 @@ async function runTurnInner(args: RunTurnArgs): Promise<TurnResult> {
         systemPrompt: args.append
           ? { type: "preset", preset: "claude_code", append: args.append }
           : { type: "preset", preset: "claude_code" },
+        // Pin the model, if config says so. Leave it null and you inherit whatever the
+        // Claude Code CLI happens to default to that week — which is how the first real
+        // build silently ran on opus-4-5 when nobody had chosen it.
+        ...(cfgModel ? { model: cfgModel } : {}),
         ...(resumeId ? { resume: resumeId } : {}),
         stderr: (d: string) => {
           stderrTail = (stderrTail + d).slice(-4000);
@@ -248,6 +267,13 @@ async function runTurnInner(args: RunTurnArgs): Promise<TurnResult> {
       lastActivity = Date.now();
 
       if (m.session_id && !sessionId) sessionId = m.session_id;
+
+      // The SDK announces the model on its init message. Say it out loud: which model built
+      // a task is not a detail, it is provenance.
+      if (m.type === "system" && m.subtype === "init" && m.model && !model) {
+        model = String(m.model);
+        await args.onProgress?.(`model: ${model}`);
+      }
 
       // Durable before anything else. This is what makes a long build survivable.
       if (sessionId && !announced) {
@@ -278,6 +304,7 @@ async function runTurnInner(args: RunTurnArgs): Promise<TurnResult> {
             toolCalls,
             durationSec: Math.floor((Date.now() - started) / 1000),
             denials,
+            model,
           };
         }
 

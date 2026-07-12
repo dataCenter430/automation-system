@@ -17,6 +17,7 @@ import { runTurn, sessionExists } from "../claude/session.ts";
 import { toTaskToml } from "../../../../packages/shared/src/taxonomy.ts";
 import type { ParsedTask } from "../../../../packages/shared/src/parse-task-blob.ts";
 import { seedSkeleton, unchangedFromSkeleton, type SkeletonResult } from "./skeleton.ts";
+import { openInEditor } from "../util/open-editor.ts";
 
 /** What a finished task must physically contain. Claude's word is never the evidence. */
 export const MANIFEST = [
@@ -80,6 +81,8 @@ export interface BuildInput {
   resuming?: boolean;
   /** The session to resume, when resuming. */
   sessionId?: string | null;
+  /** Open a VS Code window on the workspace so the build can be watched in an editor. */
+  openEditor?: boolean;
 }
 
 export interface BuildOutput {
@@ -106,6 +109,13 @@ export async function buildTask(input: BuildInput): Promise<BuildOutput> {
   // compaction cannot touch it, and it never ends up in the zip.
   const stale = join(workspace, "CLAUDE.md");
   if (existsSync(stale)) rmSync(stale, { force: true });
+
+  // Open a VS Code window on this task, if configured. The SDK still drives the build — this
+  // is a viewer. Because the SDK's session lands in this workspace's own Claude project
+  // store, the extension's Claude panel shows you this build's conversation.
+  if (input.openEditor) {
+    openInEditor(workspace, (m) => void input.onProgress?.(m));
+  }
 
   const skeleton = await seedSkeleton(workspace);
   if (skeleton.source === "zip") {

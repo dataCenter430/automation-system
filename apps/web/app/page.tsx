@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AddTask } from "./components/AddTask";
 import { Queue } from "./components/Queue";
+import { Notify } from "./components/Notify";
 
 export default function Page() {
   const [data, setData] = useState<{ tasks: any[]; events: any[] }>({ tasks: [], events: [] });
@@ -44,16 +45,21 @@ export default function Page() {
             Terminus task queue. Adding a task does not start it — you decide when.
           </p>
         </div>
-        <a
-          href="/settings"
-          style={{
-            color: "var(--dim)", textDecoration: "none", fontSize: 13,
-            border: "1px solid var(--line)", borderRadius: 6, padding: "6px 12px",
-            whiteSpace: "nowrap",
-          }}
-        >
-          Settings{owner ? ` · ${owner}` : ""}
-        </a>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+          {/* With eight two-hour builds running, you will not be watching the tab at the
+              moment one parks and asks for you. */}
+          <Notify tasks={data.tasks} />
+          <a
+            href="/settings"
+            style={{
+              color: "var(--dim)", textDecoration: "none", fontSize: 13,
+              border: "1px solid var(--line)", borderRadius: 6, padding: "6px 12px",
+              whiteSpace: "nowrap",
+            }}
+          >
+            Settings{owner ? ` · ${owner}` : ""}
+          </a>
+        </div>
       </header>
 
       {err && (

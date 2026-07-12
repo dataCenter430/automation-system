@@ -9,6 +9,8 @@ export interface Config {
     maxConcurrent: number; studyTimeoutMin: number; buildTimeoutMin: number;
     fixTimeoutMin: number; explainTimeoutMin: number;
     probeTimeoutMin: number; rateLimitBackoffSec: number;
+    /** null = inherit the CLI default (and you will not know what it is). */
+    model: string | null;
   };
   docker: {
     cpus: number; memoryMb: number; buildTimeoutSec: number;
@@ -17,7 +19,11 @@ export interface Config {
     maxConcurrentGates: number;
   };
   feedback: { pollIntervalSec: number; timeoutMin: number };
-  worker: { pollIntervalSec: number; maxParallelTasks: number };
+  worker: {
+    pollIntervalSec: number; maxParallelTasks: number;
+    /** Open a VS Code window per task workspace, as a viewer (the SDK still drives). */
+    openEditor: boolean;
+  };
   gate: {
     requireOracleReward: number; requireNullReward: number;
     requireLintClean: boolean; requireSolveProbeFails: boolean;

@@ -25,7 +25,7 @@ const time = (s: string | null) =>
 export function SessionView({ taskId, live }: { taskId: string; live: boolean }) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [note, setNote] = useState<string | null>(null);
-  const [meta, setMeta] = useState<{ costUsd?: number; transcript?: string } | null>(null);
+  const [meta, setMeta] = useState<{ costUsd?: number; transcript?: string; models?: string[] } | null>(null);
   const [follow, setFollow] = useState(true);
   const [expanded, setExpanded] = useState<number | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -39,7 +39,7 @@ export function SessionView({ taskId, live }: { taskId: string; live: boolean })
         if (stop) return;
         setTurns(j.turns ?? []);
         setNote(j.note ?? null);
-        setMeta({ costUsd: j.costUsd, transcript: j.transcript });
+        setMeta({ costUsd: j.costUsd, transcript: j.transcript, models: j.models });
       } catch { /* the poll is best-effort; a blip should not blank the view */ }
     };
     pull();
@@ -59,6 +59,20 @@ export function SessionView({ taskId, live }: { taskId: string; live: boolean })
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8, fontSize: 11.5, color: "var(--dim)" }}>
+        {/* Which model actually built this task. Provenance, not trivia — and if more than
+            one shows up, the pin changed underneath you mid-build and you want to know. */}
+        {meta?.models?.length ? (
+          <span
+            style={{
+              color: meta.models.length > 1 ? "var(--warn)" : "var(--accent)",
+              border: `1px solid ${meta.models.length > 1 ? "var(--warn)" : "var(--accent)"}`,
+              borderRadius: 4, padding: "1px 6px", fontWeight: 600,
+            }}
+            title={meta.models.length > 1 ? "More than one model ran in this session" : "The model that built this task"}
+          >
+            {meta.models.join(" + ")}
+          </span>
+        ) : null}
         <span>{turns.filter((t) => t.kind === "tool").length} tool calls</span>
         {meta?.costUsd ? <span>${meta.costUsd.toFixed(2)}</span> : null}
         {live && <span style={{ color: "var(--run)" }}>● live</span>}

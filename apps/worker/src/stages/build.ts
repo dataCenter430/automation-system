@@ -13,7 +13,7 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { render, loadSummary, BUILD_CONTRACT } from "../claude/prompts.ts";
-import { runTurn } from "../claude/session.ts";
+import { runTurn, sessionExists } from "../claude/session.ts";
 import { toTaskToml } from "../../../../packages/shared/src/taxonomy.ts";
 import type { ParsedTask } from "../../../../packages/shared/src/parse-task-blob.ts";
 import { seedSkeleton, unchangedFromSkeleton, type SkeletonResult } from "./skeleton.ts";
@@ -115,7 +115,18 @@ export async function buildTask(input: BuildInput): Promise<BuildOutput> {
     );
   }
 
+  // A recorded session id is worthless without its transcript. If the workspace came from
+  // another machine, the id is a ghost: resuming it fails, and — the subtle part — trusting
+  // it would let the STUDY_DONE marker below skip the playbook turn, because that marker
+  // means "the session that is about to build this has read the playbook". If that session
+  // is gone, nothing has read it, and we would build ungrounded.
   let sessionId = input.resuming ? (input.sessionId ?? null) : null;
+  if (sessionId && !sessionExists(workspace, sessionId)) {
+    await input.onProgress?.(
+      `recorded session ${sessionId.slice(0, 8)} is not on this machine — rebuilding from a fresh session`,
+    );
+    sessionId = null;
+  }
 
   // ---- Turn 1: study the playbook -----------------------------------------
   // The playbook is 52 KB. It goes on disk and the prompt points at it, rather than being

@@ -27,9 +27,30 @@
  * inside this repo, and we do not want the repo's own .claude/ settings leaking into a
  * build. Everything the build needs is passed explicitly.
  */
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { RateLimited, looksRateLimited } from "./errors.ts";
 import { judge } from "./guard.ts";
+
+/**
+ * Is this session actually on THIS machine?
+ *
+ * A session id is only meaningful next to the transcript it names. Claude Code stores those
+ * at ~/.claude/projects/<cwd, non-alphanumerics replaced by '-'>/<id>.jsonl, so a workspace
+ * carried over from another machine (or a different repo path) arrives with a recorded
+ * session id whose transcript is nowhere to be found.
+ *
+ * Resuming it would fail — and worse, code that trusts the id would skip the study turn on
+ * the grounds that "this session already read the playbook", when the session that read it
+ * no longer exists. Ask first.
+ */
+export function sessionExists(cwd: string, sessionId: string | null | undefined): boolean {
+  if (!sessionId) return false;
+  const dir = resolve(cwd).replace(/[^a-zA-Z0-9]/g, "-");
+  return existsSync(join(homedir(), ".claude", "projects", dir, `${sessionId}.jsonl`));
+}
 
 /** A turn that ended for any reason other than Claude finishing normally. */
 export class ClaudeTurnFailed extends Error {
@@ -95,7 +116,18 @@ export async function runTurn(args: RunTurnArgs): Promise<TurnResult> {
   const heartbeatMs = (args.heartbeatSec ?? 20) * 1000;
   const label = args.label ?? "working";
 
-  let sessionId: string | null = args.resume ?? null;
+  // Never hand the SDK a session id whose transcript is not on this machine — it would just
+  // fail. Drop it loudly and start fresh instead; a fresh session on an existing workspace
+  // can still read what is already there.
+  let resumeId = args.resume ?? null;
+  if (resumeId && !sessionExists(args.cwd, resumeId)) {
+    await args.onProgress?.(
+      `session ${resumeId.slice(0, 8)} has no transcript on this machine — starting a fresh one`,
+    );
+    resumeId = null;
+  }
+
+  let sessionId: string | null = resumeId;
   let announced = false;
   let toolCalls = 0;
   let lastActivity = Date.now();
@@ -151,7 +183,7 @@ export async function runTurn(args: RunTurnArgs): Promise<TurnResult> {
         systemPrompt: args.append
           ? { type: "preset", preset: "claude_code", append: args.append }
           : { type: "preset", preset: "claude_code" },
-        ...(args.resume ? { resume: args.resume } : {}),
+        ...(resumeId ? { resume: resumeId } : {}),
         stderr: (d: string) => {
           stderrTail = (stderrTail + d).slice(-4000);
         },

@@ -7,13 +7,12 @@
  */
 import "dotenv/config";
 import { existsSync, statSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT, snorkelRoot } from "../../../packages/shared/src/paths.ts";
 import * as docker from "./docker/runner.ts";
-import { isDesktopUsable } from "./vscode/ui.ts";
-import { verifyKeybindings, ensureKeybindings, keybindingsPath } from "./vscode/keybindings.ts";
 import { skeletonStatus } from "./stages/skeleton.ts";
 
 export interface Check {
@@ -30,10 +29,18 @@ async function checkDocker(): Promise<Check> {
     const v = await docker.run(["info", "--format", "{{.ServerVersion}}"], { timeoutSec: 20 });
     return { name: "Docker daemon", ok: true, detail: `v${v.stdout.trim()}`, required: true };
   } catch (e) {
-    return {
-      name: "Docker daemon", ok: false, detail: (e as Error).message.split("\n")[0]!,
-      fix: "Start Docker Desktop and wait for it to report Running.", required: true,
-    };
+    const msg = (e as Error).message;
+    // On Linux the daemon is usually fine and the socket is simply not readable by this
+    // user. "Start Docker Desktop" is actively misleading there, and it cost us an
+    // afternoon once.
+    const denied = /permission denied/i.test(msg);
+    const fix =
+      process.platform === "win32"
+        ? "Start Docker Desktop and wait for it to report Running."
+        : denied
+          ? "You are not in the `docker` group: run `sudo usermod -aG docker $USER`, then log out and back in (or `newgrp docker`)."
+          : "Start the daemon: `sudo systemctl start docker`.";
+    return { name: "Docker daemon", ok: false, detail: msg.split("\n")[0]!, fix, required: true };
   }
 }
 
@@ -90,9 +97,12 @@ async function checkSupabase(): Promise<Check> {
 async function checkChromeCdp(): Promise<Check> {
   const cdp = process.env.CDP_URL ?? "http://127.0.0.1:9222";
   const launchHint =
-    "Run scripts/launch-chrome.ps1. You CANNOT attach to a normally-launched Chrome: " +
-    "the debug port only exists if Chrome was STARTED with --remote-debugging-port, and " +
-    "Chrome 136+ refuses that flag on the default user-data-dir.";
+    (process.platform === "win32"
+      ? "Run scripts/launch-chrome.ps1. "
+      : "Run `bash scripts/launch-chrome.sh`. ") +
+    "You CANNOT attach to a normally-launched Chrome: the debug port only exists if Chrome " +
+    "was STARTED with --remote-debugging-port, and Chrome 136+ refuses that flag on the " +
+    "default user-data-dir.";
   try {
     const r = await fetch(`${cdp}/json/version`, { signal: AbortSignal.timeout(5_000) });
     if (!r.ok) {
@@ -124,41 +134,6 @@ function checkPlaybook(): Check {
   return { name: "Playbook (summary.txt)", ok: true, detail: `${(bytes / 1024).toFixed(0)} KB`, required: true };
 }
 
-/**
- * The visual build drives the REAL VS Code window. That needs an unlocked, signed-in
- * desktop — a locked screen does not slow it down, it makes it impossible. Required.
- */
-async function checkDesktop(): Promise<Check> {
-  if (await isDesktopUsable()) {
-    return { name: "Interactive desktop", ok: true, detail: "unlocked", required: true };
-  }
-  return {
-    name: "Interactive desktop", ok: false, detail: "LOCKED (or no interactive session)",
-    fix: "Unlock Windows and keep it unlocked while builds run. A locked screen switches to the " +
-         "secure Winlogon desktop, where no process can focus a window or send it a keystroke. " +
-         "Also disable the screensaver lock — and note that disconnecting an RDP session locks the console.",
-    required: true,
-  };
-}
-
-function checkVsCode(): Check {
-  try {
-    ensureKeybindings();
-    if (!verifyKeybindings()) {
-      return {
-        name: "VS Code keybindings", ok: false, detail: "our chords are not in keybindings.json",
-        fix: `Check ${keybindingsPath()} is writable.`, required: true,
-      };
-    }
-    return { name: "VS Code keybindings", ok: true, detail: "Claude chords installed", required: true };
-  } catch (e) {
-    return {
-      name: "VS Code keybindings", ok: false, detail: (e as Error).message.split("\n")[0]!,
-      required: true,
-    };
-  }
-}
-
 function checkSkeleton(): Check {
   const s = skeletonStatus();
   if (s.exists) {
@@ -175,8 +150,6 @@ function checkSkeleton(): Check {
 export async function preflight(): Promise<Check[]> {
   return [
     checkClaudeLogin(),
-    await checkDesktop(),
-    checkVsCode(),
     await checkDocker(),
     await checkSupabase(),
     checkPlaybook(),
@@ -204,7 +177,11 @@ export function report(checks: Check[]): boolean {
 }
 
 // Standalone: npm run preflight
-if (import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, "/")}`) {
+//
+// The hand-rolled `file:///${argv[1]}` form this used to use produced FOUR slashes on Linux
+// (argv[1] already starts with "/"), so it never matched, and `npm run preflight` printed
+// nothing and exited 0 — which reads exactly like "all checks passed".
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const checks = await preflight();
   process.exit(report(checks) ? 0 : 1);
 }

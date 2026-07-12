@@ -15,10 +15,12 @@ export interface Attached {
 
 const LAUNCH_HINT =
   "Nothing is listening on the CDP port.\n" +
-  "  Run:  powershell -File scripts/launch-chrome.ps1\n" +
+  (process.platform === "win32"
+    ? "  Run:  powershell -File scripts/launch-chrome.ps1\n"
+    : "  Run:  bash scripts/launch-chrome.sh\n") +
   "  You cannot attach to a normally-launched Chrome — the debug port only exists if Chrome\n" +
   "  was STARTED with --remote-debugging-port, and Chrome 136+ refuses that flag on the\n" +
-  "  default user-data-dir.";
+  "  default user-data-dir. (That is a Chrome rule, not a Windows one: it applies here too.)";
 
 export async function attach(cdpUrl = process.env.CDP_URL ?? "http://127.0.0.1:9222"): Promise<Attached> {
   try {

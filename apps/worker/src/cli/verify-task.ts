@@ -11,7 +11,7 @@
 import { mkdtempSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, basename } from "node:path";
-import { execFileSync } from "node:child_process";
+import { extractZip } from "../util/unzip.ts";
 import { verifyTask } from "../stages/verify.ts";
 import { formatFindings } from "../stages/lint.ts";
 import { loadConfig } from "../config.ts";
@@ -20,12 +20,7 @@ const cfg = loadConfig();
 
 function unzipTo(zipPath: string): string {
   const dir = mkdtempSync(join(tmpdir(), "tb-verify-"));
-  // PowerShell's Expand-Archive is always present on Windows; no extra dependency.
-  execFileSync(
-    "powershell",
-    ["-NoProfile", "-Command", `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${dir}' -Force`],
-    { stdio: "inherit" },
-  );
+  extractZip(zipPath, dir);
   return dir;
 }
 

@@ -1,9 +1,9 @@
 /**
  * The style filter for the three submission-form explanations.
  *
- * Generation happens in the visible VS Code conversation (see explain-vscode.ts) — Claude
- * writes them to a file and we read the file. This module is the part that decides whether
- * what came back is usable.
+ * Generation happens in the build session (see explain-generate.ts) — Claude writes them to
+ * a file and we read the file. This module is the part that decides whether what came back
+ * is usable.
  *
  * It exists because the Snorkel docs explicitly ban LLM-tell prose. Generating these with
  * an LLM and then shipping them unread would be self-defeating, so anything that fails

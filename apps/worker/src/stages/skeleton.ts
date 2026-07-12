@@ -15,7 +15,7 @@
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { execFileSync } from "node:child_process";
+import { extractZip } from "../util/unzip.ts";
 import { snorkelRoot, REPO_ROOT } from "../../../../packages/shared/src/paths.ts";
 
 export interface SkeletonResult {
@@ -92,10 +92,7 @@ export async function seedSkeleton(workspace: string): Promise<SkeletonResult> {
 
   const tmp = mkdtempSync(join(tmpdir(), "tb-skel-"));
   try {
-    execFileSync("powershell", [
-      "-NoProfile", "-Command",
-      `Expand-Archive -LiteralPath '${zip}' -DestinationPath '${tmp}' -Force`,
-    ], { stdio: "pipe" });
+    extractZip(zip, tmp);
 
     const root = unwrapRoot(tmp);
     const seeded: string[] = [];

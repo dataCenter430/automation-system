@@ -1,56 +1,61 @@
 /**
- * Generate the three submission-form explanations in the VISIBLE Claude conversation.
+ * Generate the three submission-form explanations.
  *
- * Same session that built the task, so Claude writes from what it actually built rather
- * than from the premise. It writes the JSON to a file, we read the file — the chat panel is
- * for you to watch, not for us to parse.
+ * Runs in the SAME session that built the task, so Claude writes from what it actually
+ * built rather than from the premise it was handed. It writes JSON to a file and we read
+ * the file — we never parse prose out of a chat message.
  *
- * Then we validate. The Snorkel docs ban LLM-tell prose, so generating these with an LLM and
- * shipping them unread would be self-defeating.
+ * Then we validate. The Snorkel docs explicitly ban LLM-tell prose, so generating these
+ * with an LLM and shipping them unread would be self-defeating. Anything that fails goes
+ * back for a rewrite with the specific complaint attached.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { render } from "../claude/prompts.ts";
-import { openWorkspace, sendPrompt } from "../vscode/ui.ts";
-import { waitForTurn, clearSentinel } from "../vscode/watch.ts";
+import { runTurn } from "../claude/session.ts";
 import { validateExplanation, type Explanations } from "./explain.ts";
 
 const OUT = ".pipeline/EXPLANATIONS.json";
 
-export async function generateExplanationsVisually(args: {
+export async function generateExplanations(args: {
   workspace: string;
+  sessionId: string | null;
   maxAttempts: number;
   timeoutMin: number;
   onProgress?: (msg: string) => Promise<void>;
 }): Promise<{ explanations: Explanations; attempts: number }> {
-  await openWorkspace(args.workspace);
-
   let prompt = render("04-explain.md", {});
   let lastProblems: string[] = [];
+  let sessionId = args.sessionId;
 
   for (let attempt = 1; attempt <= args.maxAttempts; attempt++) {
-    clearSentinel(args.workspace, "EXPLAIN_DONE");
-
-    await sendPrompt(args.workspace, prompt, "PROMPT_04_EXPLAIN");
     await args.onProgress?.(`explanations: attempt ${attempt}/${args.maxAttempts}`);
 
-    const r = await waitForTurn({
-      workspace: args.workspace,
-      sentinelName: "EXPLAIN_DONE",
+    const r = await runTurn({
+      prompt,
+      cwd: args.workspace,
+      resume: sessionId,
       timeoutMin: args.timeoutMin,
-      requireFiles: [OUT],
-      onHeartbeat: async (h) => args.onProgress?.(`writing explanations · ${h.elapsedSec}s`),
+      label: "writing explanations",
+      onProgress: args.onProgress,
     });
-    if (!r.done) throw new Error(`Explanations never arrived.\n${r.reason}`);
+    sessionId = r.sessionId ?? sessionId;
 
     const path = join(args.workspace, OUT);
-    if (!existsSync(path)) throw new Error(`Claude signalled done but ${OUT} is not there.`);
+    if (!existsSync(path)) {
+      prompt =
+        `You did not write ${OUT}. Write it now: a plain JSON object with exactly the keys ` +
+        `difficulty, solution, verification, each a string.`;
+      continue;
+    }
 
     let parsed: { difficulty?: string; solution?: string; verification?: string };
     try {
       parsed = JSON.parse(readFileSync(path, "utf8"));
     } catch (e) {
-      prompt = `${OUT} is not valid JSON (${(e as Error).message}). Rewrite it as a plain JSON object with keys difficulty, solution, verification, then write .pipeline/EXPLAIN_DONE again.`;
+      prompt =
+        `${OUT} is not valid JSON (${(e as Error).message}). Rewrite it as a plain JSON ` +
+        `object with keys difficulty, solution, verification.`;
       continue;
     }
 
@@ -67,9 +72,10 @@ export async function generateExplanationsVisually(args: {
     ];
     if (lastProblems.length === 0) return { explanations, attempts: attempt };
 
+    await args.onProgress?.(`style check failed: ${lastProblems.length} problem(s)`);
     prompt =
-      `Those explanations do not pass the style check. Fix exactly these problems, rewrite ` +
-      `${OUT}, and write .pipeline/EXPLAIN_DONE again:\n\n` +
+      `Those explanations do not pass the style check. Fix exactly these problems and ` +
+      `rewrite ${OUT}:\n\n` +
       lastProblems.map((p) => `- ${p}`).join("\n");
   }
 

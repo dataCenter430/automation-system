@@ -20,10 +20,10 @@ import {
 import type { TerminusRow } from "../../../packages/shared/src/types.ts";
 import type { ParsedTask } from "../../../packages/shared/src/parse-task-blob.ts";
 import { readState, writeState, patchState, type LocalState } from "./state.ts";
-import { buildTaskVisually, fixTaskVisually, missingFromManifest, BuildIncomplete } from "./stages/build-vscode.ts";
+import { buildTask, fixTask, missingFromManifest, BuildIncomplete } from "./stages/build.ts";
 import { verifyTask } from "./stages/verify.ts";
 import { zipTask, assertNoWrapperDir } from "./stages/zip.ts";
-import { generateExplanationsVisually } from "./stages/explain-vscode.ts";
+import { generateExplanations } from "./stages/explain-generate.ts";
 import { openNewSubmission, fillSubmissionForm, AttestationRefused, FormNotReady } from "./stages/upload.ts";
 import { checkFeedback, FeedbackInconclusive } from "./stages/feedback.ts";
 import { findSubmitted, clickSubmit, enableRubricGeneration } from "./stages/submit.ts";
@@ -146,16 +146,17 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
       await emitEvent({
         task_id: row.task_id, stage: "build", status: "started",
         from_state: row.pipeline_state,
-        message: resuming ? "resuming the open VS Code conversation" : "opening VS Code · new Claude conversation",
+        message: resuming ? "resuming the existing Claude session" : "new Claude session",
       });
 
       try {
-        const out = await buildTaskVisually({
+        const out = await buildTask({
           task: toParsed(row),
           slug,
           workspace: ws,
           resuming,
-          studyTimeoutMin: 15,
+          sessionId: st().claudeSessionId,
+          studyTimeoutMin: cfg.claude.studyTimeoutMin,
           buildTimeoutMin: cfg.claude.buildTimeoutMin,
           onSessionId: async (id) => {
             // Durable before anything else. This is what makes a long build survivable.
@@ -175,9 +176,10 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
         });
       } catch (e) {
         if (e instanceof RateLimited) throw e;
-        // A build that never finished is a human problem: the prompt may not have reached
-        // the chat box, or Claude may have stopped and be waiting on a question. Either way
-        // the human is watching the window and can see what happened.
+        // A build that ended with the manifest still incomplete is a human problem: Claude
+        // stopped without producing the task tree, and re-running the gate on a half-built
+        // tree would only produce a confusing Docker failure. Park it and let someone read
+        // the transcript.
         const human = e instanceof BuildIncomplete;
         await fail(ctx, row, ws, "build", (e as Error).message, human);
       }
@@ -247,11 +249,12 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
       const s2 = st();
       await emitEvent({
         task_id: row.task_id, stage: "fix", status: "started", attempt: s2.attempt,
-        message: "pasting the docker failure into the open Claude conversation",
+        message: "feeding the docker failure back to the build session",
       });
       try {
-        await fixTaskVisually({
+        await fixTask({
           workspace: ws,
+          sessionId: s2.claudeSessionId,
           template: "03-fix.md",
           vars: {
             attempt: s2.attempt,
@@ -303,10 +306,11 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
       }
       await emitEvent({ task_id: row.task_id, stage: "explain", status: "started" });
       try {
-        const { explanations, attempts } = await generateExplanationsVisually({
+        const { explanations, attempts } = await generateExplanations({
           workspace: ws,
+          sessionId: s.claudeSessionId,
           maxAttempts: cfg.retries.explainAttempts,
-          timeoutMin: 15,
+          timeoutMin: cfg.claude.explainTimeoutMin,
           onProgress: async (msg) => {
             ctx.log(`${slug}  ${msg}`);
             await emitEvent({ task_id: row.task_id, stage: "explain", status: "heartbeat", message: msg });
@@ -440,8 +444,9 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
         message: "feeding Snorkel's CI output back to the build session",
       });
       try {
-        await fixTaskVisually({
+        await fixTask({
           workspace: ws,
+          sessionId: s.claudeSessionId,
           template: "05-feedback-fix.md",
           vars: {
             attempt: s.feedbackAttempt,
@@ -456,7 +461,7 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
         });
         await emitEvent({
           task_id: row.task_id, stage: "fix", status: "completed", attempt: s.feedbackAttempt,
-          message: "remote fix applied in the VS Code conversation",
+          message: "remote fix applied in the build session",
         });
 
         // Back through the LOCAL gate before re-uploading. A fix that satisfies Snorkel's

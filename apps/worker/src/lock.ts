@@ -37,7 +37,8 @@ export function acquire(): void {
         `A worker is already running (pid ${pid}).\n` +
           `Two workers would drive the same task at once — racing on state and, worst case, ` +
           `double-submitting.\n\n` +
-          `Stop the other one, or if you are sure it is dead:\n  del "${LOCK}"`,
+          `Stop the other one, or if you are sure it is dead:\n  ` +
+            (process.platform === "win32" ? `del "${LOCK}"` : `rm "${LOCK}"`),
       );
     }
     // Stale lock from a worker that was killed. Safe to take over.

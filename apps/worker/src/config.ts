@@ -6,7 +6,8 @@ export interface Config {
   paths: { workspace: string; runs: string; zipOutput: string; documentation: string };
   retries: { verifyAttempts: number; feedbackAttempts: number; explainAttempts: number };
   claude: {
-    maxConcurrent: number; buildTimeoutMin: number; fixTimeoutMin: number;
+    maxConcurrent: number; studyTimeoutMin: number; buildTimeoutMin: number;
+    fixTimeoutMin: number; explainTimeoutMin: number;
     probeTimeoutMin: number; rateLimitBackoffSec: number;
   };
   docker: {

@@ -43,7 +43,7 @@ export function run(
 
     child.on("error", (err) => {
       clearTimeout(timer);
-      reject(new DockerError(`Failed to spawn docker: ${err.message}. Is Docker Desktop running?`));
+      reject(new DockerError(`Failed to spawn docker: ${err.message}. Is the docker CLI installed?`));
     });
 
     child.on("close", (code) => {
@@ -57,10 +57,16 @@ export function run(
 export async function assertDaemonUp(): Promise<void> {
   const r = await run(["info", "--format", "{{.ServerVersion}}"], { timeoutSec: 20 });
   if (r.code !== 0) {
-    throw new DockerError(
-      "Docker daemon is not reachable. Start Docker Desktop and wait for it to report Running.\n" +
-        `docker info said: ${(r.stderr || r.stdout).trim().split("\n")[0]}`,
-    );
+    const said = (r.stderr || r.stdout).trim().split("\n")[0] ?? "";
+    // On Linux the daemon is usually running fine and this user simply cannot read the
+    // socket. Telling them to "start Docker" sends them looking in the wrong place.
+    const fix =
+      process.platform === "win32"
+        ? "Start Docker Desktop and wait for it to report Running."
+        : /permission denied/i.test(said)
+          ? "You are not in the `docker` group: `sudo usermod -aG docker $USER`, then log out and back in."
+          : "Start the daemon: `sudo systemctl start docker`.";
+    throw new DockerError(`Docker daemon is not reachable. ${fix}\ndocker info said: ${said}`);
   }
 }
 

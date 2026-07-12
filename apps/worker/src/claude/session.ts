@@ -14,13 +14,18 @@
  *
  * Two things are load-bearing and easy to get wrong:
  *
- *   settingSources: ['project']  — WITHOUT this the SDK runs in "isolation mode" and does
- *     not load CLAUDE.md. The whole BUILD_CONTRACT design depends on CLAUDE.md being
- *     re-injected on every request, because a long build compacts and compaction summarises
- *     away the opening prompts. Omit this and the rules silently stop being enforced.
+ *   systemPrompt.append  — this is where BUILD_CONTRACT lives. It deliberately does NOT go
+ *     in a CLAUDE.md inside the task tree: lint.ts blocks CLAUDE.md as a High-severity
+ *     reviewer flag, and the gate lints the workspace, so a task carrying one fails its own
+ *     gate every time. The system prompt is not part of the conversation, so compaction
+ *     cannot summarise it away either — which was the original reason for wanting CLAUDE.md.
  *
  *   onSessionId fires on the FIRST message  — the id is persisted before any real work
  *     happens, which is what makes a crashed build resumable instead of paid for twice.
+ *
+ * settingSources is left EMPTY (SDK isolation mode) on purpose: the task workspace lives
+ * inside this repo, and we do not want the repo's own .claude/ settings leaking into a
+ * build. Everything the build needs is passed explicitly.
  */
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { RateLimited, looksRateLimited } from "./errors.ts";
@@ -127,8 +132,8 @@ export async function runTurn(args: RunTurnArgs): Promise<TurnResult> {
       options: {
         cwd: args.cwd,
         abortController: abort,
-        // Loads CLAUDE.md from the workspace. See the header — do not remove.
-        settingSources: ["project"],
+        // Isolation mode: no filesystem settings, no CLAUDE.md. See the header.
+        settingSources: [],
         // There is no human at the keyboard, so every tool call is decided by guard.ts:
         // writes must stay inside this workspace, and a short list of shell constructs a
         // task build never needs is refused. NOT 'bypassPermissions' — an unattended agent

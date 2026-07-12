@@ -10,6 +10,7 @@
 import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { parse as parseToml } from "smol-toml";
+import { unchangedFromSkeleton } from "./skeleton.ts";
 
 export type Severity = "blocking" | "warning";
 
@@ -81,6 +82,22 @@ export function lintTask(taskDir: string): LintResult {
     if (!existsSync(join(taskDir, rf))) {
       add("required_files", "blocking", rf, `Missing required file: ${rf}`);
     }
+  }
+
+  // ---- the tree must not still be the skeleton -----------------------------
+  //
+  // The skeleton ships the whole manifest and is a working hello-world task, so a workspace
+  // Claude never touched passes every other check in this file AND the Docker gate: oracle
+  // reward 1, null reward 0, lint clean. Without this rule the pipeline will cheerfully zip
+  // "write Hello, world! to hello.txt" and park it at READY TO SUBMIT.
+  //
+  // This is the last thing standing between a no-op build and Snorkel, so it is blocking.
+  for (const rel of unchangedFromSkeleton(taskDir)) {
+    add(
+      "not_the_skeleton", "blocking", rel,
+      `${rel} is still byte-for-byte the Default_Task_Skeleton. This is not a built task — ` +
+        `it is the hello-world stub. Claude never wrote this file.`,
+    );
   }
 
   // ---- task.toml -----------------------------------------------------------

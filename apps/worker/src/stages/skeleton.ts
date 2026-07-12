@@ -84,6 +84,56 @@ function unwrapRoot(dir: string): string {
  * that crashed mid-build and restarts must not have Claude's work clobbered by a fresh
  * skeleton copy.
  */
+/**
+ * Which manifest files are still byte-for-byte the skeleton's?
+ *
+ * This exists because of a bug that nearly submitted a hello-world task to Snorkel. The
+ * skeleton zip ships the ENTIRE manifest — task.toml, instruction.md, Dockerfile, solve.sh,
+ * test.sh, test_outputs.py — and it is a self-consistent little task: solve.sh writes
+ * hello.txt, the tests check for hello.txt. So a workspace where Claude did *nothing* still
+ * has a complete manifest, still passes the Docker gate (oracle 1, null 0, lint clean), and
+ * still zips and uploads.
+ *
+ * "The files exist" is therefore not evidence of a build. This is.
+ */
+const SKELETON_EVIDENCE = ["instruction.md", "solution/solve.sh", "tests/test_outputs.py"];
+
+let cachedSkeleton: Map<string, string> | null = null;
+
+function skeletonContents(): Map<string, string> {
+  if (cachedSkeleton) return cachedSkeleton;
+  const m = new Map<string, string>();
+  const zip = skeletonPath();
+  if (zip) {
+    const tmp = mkdtempSync(join(tmpdir(), "tb-skel-cmp-"));
+    try {
+      extractZip(zip, tmp);
+      const root = unwrapRoot(tmp);
+      for (const rel of SKELETON_EVIDENCE) {
+        const p = join(root, ...rel.split("/"));
+        if (existsSync(p)) m.set(rel, readFileSync(p, "utf8").replace(/\r\n/g, "\n").trim());
+      }
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+  cachedSkeleton = m;
+  return m;
+}
+
+/** Returns the manifest files that Claude never touched. Empty means a real build happened. */
+export function unchangedFromSkeleton(taskDir: string): string[] {
+  const skel = skeletonContents();
+  if (skel.size === 0) return []; // no skeleton to compare against — nothing to say
+  const same: string[] = [];
+  for (const [rel, body] of skel) {
+    const p = join(taskDir, ...rel.split("/"));
+    if (!existsSync(p)) continue;
+    if (readFileSync(p, "utf8").replace(/\r\n/g, "\n").trim() === body) same.push(rel);
+  }
+  return same;
+}
+
 export async function seedSkeleton(workspace: string): Promise<SkeletonResult> {
   const zip = skeletonPath();
   if (!zip) return { source: "none", path: null, seeded: [], patched: [] };

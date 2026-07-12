@@ -20,7 +20,7 @@ import {
 import type { TerminusRow } from "../../../packages/shared/src/types.ts";
 import type { ParsedTask } from "../../../packages/shared/src/parse-task-blob.ts";
 import { readState, writeState, patchState, type LocalState } from "./state.ts";
-import { buildTask, fixTask, missingFromManifest, BuildIncomplete } from "./stages/build.ts";
+import { buildTask, fixTask, buildAlreadyComplete, BuildIncomplete } from "./stages/build.ts";
 import { verifyTask } from "./stages/verify.ts";
 import { zipTask, assertNoWrapperDir } from "./stages/zip.ts";
 import { generateExplanations } from "./stages/explain-generate.ts";
@@ -132,10 +132,16 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
     case S.BUILD_RUNNING: {
       const resuming = st().claudeSessionId !== null;
 
-      // A crash mid-build lands here with a session already recorded. If the manifest is
-      // complete, the build actually finished and only the transition was lost — do not
-      // pay for it twice.
-      if (resuming && missingFromManifest(ws).length === 0) {
+      // A crash mid-build lands here with a session already recorded. If the build genuinely
+      // finished and only the DB transition was lost, do not pay for it twice.
+      //
+      // This used to ask `missingFromManifest(ws).length === 0` — which is not the same
+      // question. seedSkeleton() writes the ENTIRE manifest before Claude is ever called,
+      // and the skeleton is a working hello-world task, so a build that died on its first
+      // tool call left a workspace that answered "yes" and was shipped straight to the gate
+      // — which passed it. buildAlreadyComplete() checks a marker we wrote ourselves, and
+      // that the tree is not still the skeleton.
+      if (resuming && buildAlreadyComplete(ws)) {
         await transition(ctx, row, ws, S.BUILT, {
           stage: "build",
           message: "recovered: build was already complete on disk",

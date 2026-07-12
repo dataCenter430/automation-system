@@ -10,13 +10,13 @@
  * of missing files exactly once, and if it still will not produce them the stage fails loudly
  * rather than passing a half-built task to the Docker gate.
  */
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { render, loadSummary, BUILD_CONTRACT } from "../claude/prompts.ts";
 import { runTurn } from "../claude/session.ts";
 import { toTaskToml } from "../../../../packages/shared/src/taxonomy.ts";
 import type { ParsedTask } from "../../../../packages/shared/src/parse-task-blob.ts";
-import { seedSkeleton, type SkeletonResult } from "./skeleton.ts";
+import { seedSkeleton, unchangedFromSkeleton, type SkeletonResult } from "./skeleton.ts";
 
 /** What a finished task must physically contain. Claude's word is never the evidence. */
 export const MANIFEST = [
@@ -30,6 +30,29 @@ export const MANIFEST = [
 
 export function missingFromManifest(taskDir: string): string[] {
   return MANIFEST.filter((f) => !existsSync(join(taskDir, f)));
+}
+
+/**
+ * Written by US, not by Claude, once a build turn has actually returned AND left a complete
+ * manifest that is not just the skeleton.
+ *
+ * The crash-recovery path used to ask "are all the manifest files present?" and treat yes as
+ * "the build finished, only the DB transition was lost". That is wrong, and dangerously so:
+ * seedSkeleton() lays down the entire manifest before Claude is ever called, so a build that
+ * died on its first tool call leaves a workspace that looks complete. The recovered task then
+ * skips the build, passes the Docker gate (the skeleton is a working hello-world task), and
+ * parks at READY TO SUBMIT.
+ *
+ * A marker we write ourselves is evidence. Files existing is not.
+ */
+const BUILD_DONE = ".pipeline/BUILD_DONE";
+
+export function buildAlreadyComplete(taskDir: string): boolean {
+  return (
+    existsSync(join(taskDir, BUILD_DONE)) &&
+    missingFromManifest(taskDir).length === 0 &&
+    unchangedFromSkeleton(taskDir).length === 0
+  );
 }
 
 /** Claude's turn ended, but the task tree is not complete. A human should look. */
@@ -69,10 +92,20 @@ export async function buildTask(input: BuildInput): Promise<BuildOutput> {
   const { workspace, task } = input;
   mkdirSync(join(workspace, ".pipeline"), { recursive: true });
 
-  // Compaction summarises away the opening prompts on a long build, but CLAUDE.md is
-  // re-injected on every request. This is the set of rules that has to survive that.
-  // (It only reaches Claude because session.ts sets settingSources: ['project'].)
-  writeFileSync(join(workspace, "CLAUDE.md"), BUILD_CONTRACT + "\n", "utf8");
+  // BUILD_CONTRACT is injected through the SDK's systemPrompt.append (see session.ts), NOT
+  // written to CLAUDE.md in the task tree.
+  //
+  // It used to be a CLAUDE.md, on the reasoning that a long build compacts and compaction
+  // summarises away the opening prompts, whereas CLAUDE.md is re-read every request. The
+  // reasoning was right; the mechanism was fatal. lint.ts blocks CLAUDE.md inside a task
+  // ("must not ship inside the task — it is a High-severity reviewer flag"), and the gate
+  // lints the workspace — so every build wrote a file that guaranteed its own gate failure,
+  // then burned all three fix attempts and landed in FAILED.
+  //
+  // The system prompt is the better home anyway: it is not part of the conversation, so
+  // compaction cannot touch it, and it never ends up in the zip.
+  const stale = join(workspace, "CLAUDE.md");
+  if (existsSync(stale)) rmSync(stale, { force: true });
 
   const skeleton = await seedSkeleton(workspace);
   if (skeleton.source === "zip") {
@@ -88,8 +121,13 @@ export async function buildTask(input: BuildInput): Promise<BuildOutput> {
   // The playbook is 52 KB. It goes on disk and the prompt points at it, rather than being
   // pasted into the message: Claude reads files perfectly well, and this keeps the prompt
   // small and the transcript readable.
+  //
+  // The marker only means "the session that is about to build this has already read the
+  // playbook". If we are NOT resuming a session, whatever read it is gone, and skipping the
+  // study turn would build ungrounded against a fresh context — which is the one failure
+  // mode that produces a confidently-wrong task the gate cannot catch.
   const studyMarker = join(workspace, ".pipeline", "STUDY_DONE");
-  if (!existsSync(studyMarker)) {
+  if (!sessionId || !existsSync(studyMarker)) {
     writeFileSync(join(workspace, ".pipeline", "TERMINUS_PLAYBOOK.md"), loadSummary(), "utf8");
     await input.onProgress?.("turn 1: studying the playbook");
 
@@ -146,26 +184,46 @@ export async function buildTask(input: BuildInput): Promise<BuildOutput> {
     `build turn done · ${build.toolCalls} tool calls · $${build.costUsd.toFixed(2)}`,
   );
 
-  // ---- The manifest is the evidence ---------------------------------------
+  // ---- Evidence, not assertions -------------------------------------------
+  // Two ways this can be a lie: files missing, or files present but still the skeleton's.
+  // The second is the dangerous one — see buildAlreadyComplete() above.
   let missing = missingFromManifest(workspace);
-  if (missing.length) {
-    await input.onProgress?.(`incomplete: ${missing.join(", ")} — asking once more`);
+  let untouched = unchangedFromSkeleton(workspace);
+
+  if (missing.length || untouched.length) {
+    const complaint = [
+      ...missing.map((f) => `- ${f} does not exist`),
+      ...untouched.map((f) => `- ${f} is still the untouched skeleton stub (the hello-world placeholder)`),
+    ].join("\n");
+    await input.onProgress?.(`build not real yet — asking once more:\n${complaint}`);
+
     await runTurn({
       prompt:
-        `The task tree is incomplete. These required files do not exist yet:\n\n` +
-        missing.map((f) => `- ${f}`).join("\n") +
-        `\n\nCreate them now, in this workspace, to the standard in CLAUDE.md. ` +
+        `The task tree is not built. Specifically:\n\n${complaint}\n\n` +
+        `The skeleton you were given is a hello-world placeholder ("write Hello, world! to ` +
+        `hello.txt"). It is NOT the task. Replace it: write the real instruction.md, the real ` +
+        `solution, and real tests for the task described earlier, to the standard in CLAUDE.md. ` +
         `Do not explain what you would do; write the files.`,
       cwd: workspace,
       resume: sessionId,
       append: BUILD_CONTRACT,
       timeoutMin: input.buildTimeoutMin,
-      label: "completing manifest",
+      label: "completing the build",
       onProgress: input.onProgress,
     });
+
     missing = missingFromManifest(workspace);
-    if (missing.length) throw new BuildIncomplete(missing);
+    untouched = unchangedFromSkeleton(workspace);
+    if (missing.length || untouched.length) {
+      throw new BuildIncomplete([
+        ...missing,
+        ...untouched.map((f) => `${f} (still the skeleton stub)`),
+      ]);
+    }
   }
+
+  // Only now is the build real. The marker is what crash recovery trusts.
+  writeFileSync(join(workspace, ".pipeline", "BUILD_DONE"), new Date().toISOString(), "utf8");
 
   return { sessionId, skeleton, summary: build.text.split("\n")[0] ?? null };
 }

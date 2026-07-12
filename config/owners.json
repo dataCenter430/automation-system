@@ -1,0 +1,9 @@
+{
+  "$comment": "activeOwner is stamped onto every new task's terminus.task_owner column at add time — it is who Snorkel will see as the owner of the submission. Edit this from the web UI (/settings) rather than by hand: PUT /api/settings validates that activeOwner is one of owners, which hand-editing does not.",
+  "activeOwner": "Pug",
+  "owners": [
+    "Hercules",
+    "Mickey",
+    "Pug"
+  ]
+}

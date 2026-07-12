@@ -1,0 +1,138 @@
+/**
+ * Seed the task workspace from the official Terminus skeleton before Claude starts.
+ *
+ * Two things worth knowing about that skeleton, both discovered by reading it:
+ *
+ * 1. Its `tests/test.sh` ships the EXACT pattern Snorkel's own rejection log calls a
+ *    blocking issue — a comment and a blank line between `RC=$?` and the `if`, plus a
+ *    trailing `exit "$RC"`. The skeleton predates that feedback and was never updated. So
+ *    we patch it to the canonical form on the way in. Seeding a known-rejected file and
+ *    then paying a Claude fix cycle to un-break it would be silly.
+ *
+ * 2. Its Dockerfile is not digest-pinned. That is Snorkel's own current template, so we
+ *    treat pinning as a warning rather than a blocker (see stages/lint.ts).
+ */
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { execFileSync } from "node:child_process";
+import { snorkelRoot, REPO_ROOT } from "../../../../packages/shared/src/paths.ts";
+
+export interface SkeletonResult {
+  source: "zip" | "none";
+  path: string | null;
+  seeded: string[];
+  patched: string[];
+}
+
+/** The canonical reward block, verbatim from the ACCEPTED task, not from the skeleton. */
+const CANONICAL_TEST_SH = `#!/bin/bash
+
+# Verifier dependencies are baked into environment/Dockerfile so the run is offline.
+# Add task-specific verifier-only Python packages there, not here.
+
+mkdir -p /logs/verifier
+
+# The image must set a WORKDIR; running from / means the Dockerfile forgot one.
+if [ "$PWD" = "/" ]; then
+    echo "Error: No working directory set. Please set a WORKDIR in your Dockerfile before running this script."
+    exit 1
+fi
+
+python -m pytest -o cache_dir=/tmp/pytest_cache \\
+  --ctrf /logs/verifier/ctrf.json /tests/test_outputs.py -rA
+RC=$?
+if [ "$RC" -eq 0 ]; then
+  echo 1 > /logs/verifier/reward.txt
+else
+  echo 0 > /logs/verifier/reward.txt
+fi
+`;
+
+export function skeletonPath(): string | null {
+  const fromEnv = process.env.SKELETON_ZIP;
+  const candidates = [
+    fromEnv ? resolve(fromEnv) : null,
+    resolve(snorkelRoot(), "documentation", "Default_Task_Skeleton.zip"),
+    resolve(REPO_ROOT, "templates", "Default_Task_Skeleton.zip"),
+  ].filter(Boolean) as string[];
+
+  return candidates.find((p) => existsSync(p)) ?? null;
+}
+
+export function skeletonStatus(): { path: string | null; exists: boolean } {
+  const p = skeletonPath();
+  return { path: p, exists: p !== null };
+}
+
+/** Some skeletons wrap everything in one folder; ours does not. Handle both. */
+function unwrapRoot(dir: string): string {
+  const entries = readdirSync(dir, { withFileTypes: true });
+  const visible = entries.filter((e) => !e.name.startsWith("__MACOSX") && !e.name.startsWith("."));
+  if (visible.length === 1 && visible[0]!.isDirectory()) {
+    const inner = join(dir, visible[0]!.name);
+    // Only unwrap if the inner folder actually looks like a task tree.
+    if (existsSync(join(inner, "task.toml")) || existsSync(join(inner, "tests"))) return inner;
+  }
+  return dir;
+}
+
+/**
+ * Copy the skeleton into `workspace`, NEVER overwriting anything already there.
+ *
+ * The never-overwrite rule is what makes this safe to call on a resumed build: a worker
+ * that crashed mid-build and restarts must not have Claude's work clobbered by a fresh
+ * skeleton copy.
+ */
+export async function seedSkeleton(workspace: string): Promise<SkeletonResult> {
+  const zip = skeletonPath();
+  if (!zip) return { source: "none", path: null, seeded: [], patched: [] };
+
+  mkdirSync(workspace, { recursive: true });
+
+  const tmp = mkdtempSync(join(tmpdir(), "tb-skel-"));
+  try {
+    execFileSync("powershell", [
+      "-NoProfile", "-Command",
+      `Expand-Archive -LiteralPath '${zip}' -DestinationPath '${tmp}' -Force`,
+    ], { stdio: "pipe" });
+
+    const root = unwrapRoot(tmp);
+    const seeded: string[] = [];
+
+    const walk = (src: string, rel: string) => {
+      for (const e of readdirSync(src, { withFileTypes: true })) {
+        const from = join(src, e.name);
+        const relPath = rel ? `${rel}/${e.name}` : e.name;
+        const to = join(workspace, relPath);
+
+        if (e.isDirectory()) {
+          mkdirSync(to, { recursive: true });
+          walk(from, relPath);
+          continue;
+        }
+        if (existsSync(to)) continue; // resumed build — do not clobber Claude's work
+        cpSync(from, to);
+        seeded.push(relPath);
+      }
+    };
+    walk(root, "");
+
+    // Patch the reward block. The skeleton's version is a documented rejection; ours is
+    // copied from the task that actually got accepted.
+    const patched: string[] = [];
+    const testSh = join(workspace, "tests", "test.sh");
+    if (existsSync(testSh)) {
+      const cur = readFileSync(testSh, "utf8").replace(/\r\n/g, "\n");
+      const isCanonical = /RC=\$\?\nif \[ "\$RC" -eq 0 \]; then/.test(cur) && !/^\s*exit\s+"?\$RC"?\s*$/m.test(cur);
+      if (!isCanonical) {
+        writeFileSync(testSh, CANONICAL_TEST_SH, "utf8");
+        patched.push("tests/test.sh (canonical reward block)");
+      }
+    }
+
+    return { source: "zip", path: zip, seeded, patched };
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}

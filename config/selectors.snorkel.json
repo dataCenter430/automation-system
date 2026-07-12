@@ -1,0 +1,180 @@
+{
+  "$version": 1,
+  "$comment": "EVERY Snorkel DOM selector lives here. No selector string may appear in a .ts file. Candidates are tried in order; first match wins. `{token}` placeholders are substituted at resolve time. Regenerate candidates with: npm run selectors:record",
+
+  "pages": {
+    "home": "https://experts.snorkel-ai.com/home"
+  },
+
+  "elements": {
+    "home.projectCard": {
+      "description": "Any assignment/project card on /home",
+      "candidates": [{ "by": "testid", "value": "project-card" }]
+    },
+    "home.searchInput": {
+      "description": "Search box above the task list",
+      "candidates": [{ "by": "testid", "value": "assignments-search-input" }]
+    },
+    "home.assignmentsList": {
+      "description": "Container for the 'Tasks to be revised' cards",
+      "candidates": [{ "by": "testid", "value": "assignments-list" }]
+    },
+    "home.newSubmissionLink": {
+      "description": "The 'Submission' card's link — clicking its Start button opens a NEW submission",
+      "candidates": [{ "by": "testid", "value": "Submission-Terminus-2nd-Edition" }]
+    },
+    "home.newSubmissionStart": {
+      "scope": "home.newSubmissionLink",
+      "description": "Start button inside the new-submission card",
+      "candidates": [
+        { "by": "role", "role": "button", "name": "Start", "exact": true },
+        { "by": "css", "value": "button" }
+      ]
+    },
+    "home.reviseCard": {
+      "description": "The revise card for ONE task. The task uuid IS the testid prefix. Its href carries ?assignmentId=",
+      "candidates": [{ "by": "testid", "value": "{task_id}-Terminus-2nd-Edition" }]
+    },
+
+    "submission.uid": {
+      "description": "Submission UID in the sticky header, next to the 'UID:' label",
+      "candidates": [{ "by": "css", "value": "span[title='Click to copy']" }]
+    },
+    "submission.section": {
+      "description": "Radix accordion section wrapping the whole form. MUST be expanded — Radix does not mount the fields until it is open.",
+      "candidates": [
+        { "by": "testid", "value": "section-Terminal bench 2.0 task submission" },
+        { "by": "css", "value": "[data-testid^='section-Terminal bench']" }
+      ]
+    },
+    "submission.autosave": {
+      "description": "'Last saved at HH:MM' indicator. Confirms the server took our field writes.",
+      "candidates": [{ "by": "text", "value": "Last saved at" }]
+    },
+
+    "submission.zipInput": {
+      "description": "File input for the task zip. It is class='hidden' — use setInputFiles, never click.",
+      "hidden": true,
+      "candidates": [
+        { "by": "css", "value": "[data-testid='field-upload_a_zip_file'] input[type=file]" },
+        { "by": "css", "value": "input[type=file][accept*='.zip']" }
+      ]
+    },
+    "submission.zipFilename": {
+      "scope": "submission.zipField",
+      "description": "Rendered filename after a successful attach — proof the upload took",
+      "candidates": [{ "by": "css", "value": "[class*='filename'], [data-testid*='file-name']" }]
+    },
+    "submission.zipField": {
+      "description": "Whole upload field block",
+      "candidates": [{ "by": "testid", "value": "field-upload_a_zip_file" }]
+    },
+
+    "submission.difficultyExplanation": {
+      "description": "Difficulty Explanation textarea (required)",
+      "candidates": [
+        { "by": "css", "value": "#difficulty_explanation" },
+        { "by": "css", "value": "[data-testid='field-difficulty_explanation'] textarea" }
+      ]
+    },
+    "submission.solutionExplanation": {
+      "description": "Solution Explanation textarea (required)",
+      "candidates": [
+        { "by": "css", "value": "#solution_explanation" },
+        { "by": "css", "value": "[data-testid='field-solution_explanation'] textarea" }
+      ]
+    },
+    "submission.verificationExplanation": {
+      "description": "Verification Explanation textarea (required)",
+      "candidates": [
+        { "by": "css", "value": "#verification_explanation" },
+        { "by": "css", "value": "[data-testid='field-verification_explanation'] textarea" }
+      ]
+    },
+
+    "submission.promptCheckbox": {
+      "description": "REQUIRED attestation: 'I reviewed my prompt (instruction.md)...'. Only tick after our own lint has actually verified those claims. Check feedback stays disabled until this is ticked.",
+      "candidates": [
+        { "by": "css", "value": "[data-testid='field-prompt_checkbox'] [role=checkbox]" },
+        { "by": "role", "role": "checkbox", "name": "/I confirm that the above is true/i" }
+      ]
+    },
+
+    "submission.checkFeedbackButton": {
+      "description": "'Check feedback' — runs Snorkel's fast static checks. Rendered disabled until zip + 3 explanations + prompt checkbox are all done. Its disabled state IS our readiness oracle.",
+      "candidates": [
+        { "by": "css", "value": "[data-testid='field-feedbackbutton-fast_static_checks'] button" },
+        { "by": "role", "role": "button", "name": "/check feedback/i" }
+      ]
+    },
+    "submission.checkFeedbackMissingFields": {
+      "scope": "submission.checkFeedbackField",
+      "description": "'Complete required fields first: ...' — Snorkel telling us exactly what didn't take. Read this instead of guessing.",
+      "candidates": [{ "by": "text", "value": "Complete required fields first" }]
+    },
+    "submission.checkFeedbackField": {
+      "description": "Whole 'Fast static checks' field block",
+      "candidates": [{ "by": "testid", "value": "field-feedbackbutton-fast_static_checks" }]
+    },
+
+    "submission.textSummaryField": {
+      "description": "'Summary' — Monaco editor (inmemory://model/1). Agent simulation + per-test stats + instruction sufficiency. READ VIA THE MONACO MODEL, not .view-line: Monaco virtualizes and you would silently get a truncated log.",
+      "candidates": [{ "by": "testid", "value": "field-text_summary" }]
+    },
+    "submission.qualityCheckField": {
+      "description": "'Quality check summary' — Monaco editor (inmemory://model/2)",
+      "candidates": [{ "by": "testid", "value": "field-quality_check_summary" }]
+    },
+    "submission.agentReviewField": {
+      "description": "'Agent review' — populated after Submit, not after Check feedback",
+      "candidates": [{ "by": "testid", "value": "field-test_review" }]
+    },
+    "submission.difficultyArtifactField": {
+      "description": "'Download difficulty check results'",
+      "candidates": [{ "by": "testid", "value": "field-difficulty_check_artifact_s3_key" }]
+    },
+
+    "submission.generateRubricCheckbox": {
+      "description": "PLACEHOLDER — 'generate rubric automatically'. Confirm with `npm run selectors:record`. Tick ONLY after Check feedback comes back green.",
+      "$unconfirmed": true,
+      "candidates": [
+        { "by": "css", "value": "[data-testid*='rubric'] [role=checkbox]" },
+        { "by": "role", "role": "checkbox", "name": "/generate.*rubric/i" }
+      ]
+    },
+    "submission.submitButton": {
+      "description": "PLACEHOLDER — the real Submit. Irreversible. Confirm with `npm run selectors:record`.",
+      "$unconfirmed": true,
+      "candidates": [
+        { "by": "role", "role": "button", "name": "Submit", "exact": true },
+        { "by": "css", "value": "button[type=submit]" }
+      ]
+    },
+
+    "rubric.container": {
+      "description": "From Rubric-extension: repeatable criteria list",
+      "candidates": [{ "by": "testid", "value": "repeatable-criteria" }]
+    },
+    "rubric.instance": {
+      "description": "Nth criterion row. Radix mounts its fields only when the row is open.",
+      "candidates": [{ "by": "testid", "value": "repeatable-criteria-instance-{i}" }]
+    },
+    "rubric.criterionText": {
+      "scope": "rubric.instance",
+      "candidates": [
+        { "by": "css", "value": "#textarea-criterion" },
+        { "by": "css", "value": "textarea" }
+      ]
+    },
+    "rubric.criterionWeight": {
+      "scope": "rubric.instance",
+      "candidates": [
+        { "by": "css", "value": "#numeric-weight" },
+        { "by": "css", "value": "input[type=number]" }
+      ]
+    },
+    "rubric.addButton": {
+      "candidates": [{ "by": "role", "role": "button", "name": "/add criterion/i" }]
+    }
+  }
+}

@@ -1,0 +1,85 @@
+{
+  "$comment": "Maps the human-readable labels in a task blob to the closed vocabularies task.toml requires. validate_task_fields is a blocking CI check, so Claude must never guess these.",
+
+  "category": {
+    "$comment": "task.toml [metadata] category — exactly one of the 9. Key = label as it appears in the blob (case-insensitive).",
+    "$allowed": [
+      "system-administration",
+      "build-and-dependency-management",
+      "data-processing",
+      "games",
+      "software-engineering",
+      "machine-learning",
+      "debugging",
+      "security",
+      "scientific-computing"
+    ],
+    "$blocked": {
+      "$comment": "Snorkel is currently NOT accepting tasks in these categories. A task that resolves to one of them is rejected at parse time, before any build starts — finding this out after a 45-minute build would be pure waste.",
+      "categories": ["software-engineering", "debugging", "data-processing"]
+    },
+
+    "interactive challenges & games": "games",
+    "interactive challenges and games": "games",
+    "games": "games",
+    "system administration": "system-administration",
+    "build and dependency management": "build-and-dependency-management",
+    "data processing": "data-processing",
+    "software engineering": "software-engineering",
+    "machine learning": "machine-learning",
+    "machine learning & ai": "machine-learning",
+    "machine learning and ai": "machine-learning",
+    "ml & ai": "machine-learning",
+    "debugging": "debugging",
+    "security": "security",
+    "scientific computing": "scientific-computing"
+  },
+
+  "subcategory": {
+    "$comment": "task.toml [metadata] subcategories — zero or more. long_context carries an extra bar: >=50k tokens of real prose, not grep-solvable.",
+    "$allowed": ["long_context", "tool_specific", "api_integration", "db_interaction", "ui_building"],
+    "long context": "long_context",
+    "tool specific": "tool_specific",
+    "tool-specific": "tool_specific",
+    "api integration": "api_integration",
+    "db interaction": "db_interaction",
+    "database interaction": "db_interaction",
+    "ui building": "ui_building"
+  },
+
+  "language": {
+    "$comment": "task.toml [metadata] languages. Free-form, but normalized so the same language never appears under two spellings. NOTE: never add python here just because the verifier tests are pytest — that is an explicit doc rule.",
+    "c": "c",
+    "c++": "cpp",
+    "cpp": "cpp",
+    "c#": "csharp",
+    "go": "go",
+    "golang": "go",
+    "rust": "rust",
+    "java": "java",
+    "javascript": "javascript",
+    "typescript": "typescript",
+    "python": "python",
+    "ruby": "ruby",
+    "perl": "perl",
+    "lua": "lua",
+    "php": "php",
+    "sql": "sql",
+    "rego": "rego",
+    "bash": "bash",
+    "shell": "bash",
+    "posix shell": "bash",
+    "sh": "bash",
+    "posix sh": "bash",
+    "powershell": "powershell",
+    "haskell": "haskell",
+    "scala": "scala",
+    "kotlin": "kotlin",
+    "swift": "swift",
+    "r": "r",
+    "julia": "julia",
+    "ocaml": "ocaml",
+    "elixir": "elixir",
+    "zig": "zig"
+  }
+}

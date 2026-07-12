@@ -1,0 +1,53 @@
+{
+  "paths": {
+    "$comment": "${SNORKEL_ROOT} defaults to the repo's parent folder and can be overridden in .env. No absolute paths here — this system runs on a different machine than it is developed on.",
+    "workspace": "${REPO_ROOT}/workspace",
+    "runs": "${REPO_ROOT}/runs",
+    "zipOutput": "${SNORKEL_ROOT}/Working",
+    "documentation": "${SNORKEL_ROOT}/documentation"
+  },
+
+  "retries": {
+    "$comment": "Two independent fix loops. verify = local Docker gate. feedback = Snorkel's own static checks.",
+    "verifyAttempts": 3,
+    "feedbackAttempts": 3,
+    "explainAttempts": 3
+  },
+
+  "claude": {
+    "$comment": "Auth comes from the logged-in Claude Code CLI (~/.claude), NOT an API key. maxConcurrent guards the subscription rate limit.",
+    "maxConcurrent": 1,
+    "buildTimeoutMin": 45,
+    "fixTimeoutMin": 30,
+    "probeTimeoutMin": 30,
+    "rateLimitBackoffSec": 120
+  },
+
+  "docker": {
+    "$comment": "Mirrors task.toml [environment]; --network none reproduces allow_internet=false at test time.",
+    "cpus": 2,
+    "memoryMb": 4096,
+    "buildTimeoutSec": 1200,
+    "solveTimeoutSec": 900,
+    "testTimeoutSec": 600
+  },
+
+  "feedback": {
+    "$comment": "Check feedback runs server-side and takes a while. This is a POLL, not a blocking wait — the worker interleaves other tasks between polls.",
+    "pollIntervalSec": 30,
+    "timeoutMin": 20
+  },
+
+  "worker": {
+    "pollIntervalSec": 5,
+    "maxParallelTasks": 3
+  },
+
+  "gate": {
+    "$comment": "All four must hold before a task may be uploaded. oracle-passes alone proves nothing.",
+    "requireOracleReward": 1,
+    "requireNullReward": 0,
+    "requireLintClean": true,
+    "requireSolveProbeFails": true
+  }
+}

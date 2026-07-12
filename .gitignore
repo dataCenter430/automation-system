@@ -1,0 +1,7 @@
+.env
+node_modules/
+workspace/
+runs/
+.next/
+dist/
+*.log

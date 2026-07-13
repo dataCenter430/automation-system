@@ -8,6 +8,105 @@ tempted to improvise on structure, don't — improvise on the *task idea*, never
 
 
 ================================================================================
+SECTION 0. THE PREMISE GATE — DECIDE THIS BEFORE YOU CREATE A SINGLE FILE
+================================================================================
+
+Nothing else in this document matters if you fail this gate. It is not a formatting rule and it
+cannot be patched afterwards: it is a property of WHAT THE TASK IS ABOUT.
+
+TWO INDEPENDENT CLASSIFIERS READ YOUR TASK'S CONTENT. Either one can reject it on its own.
+NEITHER of them reads task.toml. You cannot pass either by relabelling.
+
+
+--- 0.1  THE OCCUPATION CLASSIFIER -------------------------------------------------------------
+
+Snorkel predicts an OCCUPATION from the task's content and rejects it outright if the answer is
+on this list. Verbatim from Sector.txt:
+
+  NO LONGER ACCEPTING SUBMISSIONS in these occupations:
+    Financial Managers
+    Accountants and Auditors
+    Financial and Investment Analysts
+    Software Quality Assurance Analysts and Testers
+    Data Scientists
+    Software Developers                      <-- read that one again
+
+  These additionally FAIL the Occupation Diversity Eval:
+    Business Intelligence Analysts, Financial Managers, Financial and Investment Analysts,
+    Medical and Health Services Managers, Software Quality Assurance Analysts and Testers,
+    Software Developers, Accountants and Auditors, Registered Nurses, Sales Representatives of
+    Services (Except Advertising, Insurance, Financial Services, and Travel), Data Scientists,
+    News Analysts/Reporters/Journalists, Acute Care Nurses, Medical Scientists (Except
+    Epidemiologists), Education Administrators (Postsecondary)
+
+A GENERIC CODING EXERCISE IS ALWAYS PREDICTED "SOFTWARE DEVELOPERS". That is the default answer
+for any task whose premise is "here is some code, do something to it". No wording escapes it,
+because the classifier is not reading for wording.
+
+  a defect hunt in a source file        -> Software Developers / QA Analysts.  BLOCKED.
+  an ETL / parse / transform / report   -> Data Scientists.                    BLOCKED.
+
+Both of those are submissions we actually shipped, and both were rejected.
+
+
+--- 0.2  THE CATEGORY CLASSIFIER ---------------------------------------------------------------
+
+A second LLM classifier reads instruction.md, the shipped source, solve.sh and the TEST NAMES,
+and predicts a `category`. Three values are BLOCKED and reject the task outright:
+
+    software-engineering        debugging        data-processing
+
+It never reads task.toml. Putting a legal value in the enum does not make the task legal.
+
+
+--- 0.3  THE DEFENCE IS A BUSINESS DOMAIN, NOT A DISCLAIMER ------------------------------------
+
+    OUR ASSIGNED SECTOR IS:  Retail Trade
+
+    Allowed sectors, verbatim:
+      Agriculture, Forestry, Fishing, and Hunting
+      Mining, Quarrying, and Oil and Gas Extraction
+      Utilities
+      Retail Trade
+      Accommodation and Food Services
+      Wholesale Trade
+      Transportation and Warehousing
+
+Set the task inside a REAL BUSINESS in that sector, and make the deliverable A BUSINESS DECISION
+ARTIFACT that happens to require deep engineering — not a code artifact that happens to sit in a
+business-shaped folder.
+
+  WRONG — this is what we kept building, and it is dead on arrival:
+    "migrate the ImageMagick textile feature extractor to C + SQLite"
+    "automate the Graphviz worker for the stained-glass vault"
+       -> the ticket was filed by a Software Developer.
+
+  RIGHT:
+    "reconcile the freight-rating rules for a wholesale distributor's carrier contracts"
+    "compute markdown eligibility for a grocery chain's perishable inventory"
+    "validate a rail carrier's hazmat manifest against the current tariff schedule"
+       -> filed by a logistics analyst, a category manager, a compliance officer.
+
+THE ENGINEERING DOES NOT GET EASIER. The domain moves; the difficulty does not. Everything in
+SECTION 8 (the hardness levers) still applies, and applies inside the business domain.
+
+
+--- 0.4  THE GATE ------------------------------------------------------------------------------
+
+Before you create a single file, write this sentence down and answer it:
+
+    "The person who would file this ticket holds the job title: ____________."
+
+If that title is Software Developer, Software QA Analyst, or Data Scientist — THE TASK IS ALREADY
+DEAD. Do not adjust the wording. Do not change the tags. Do not pick a different enum value.
+GO BACK AND CHANGE WHAT THE TASK IS ABOUT.
+
+We have burned two submissions relabelling a task after the fact. The first escaped
+software-engineering by relabelling, and was immediately blocked as data-processing. Renaming the
+field does not move the classifier. Rewriting the premise does.
+
+
+================================================================================
 SECTION 1. THE MANDATE
 ================================================================================
 
@@ -104,13 +203,22 @@ check; a missing or misspelled key fails the submission.
   author_name = "anonymous"
   author_email = "anonymous"
   difficulty = "hard"
-  category = "software-engineering"
+  # !! category is a CLOSED VOCABULARY and three of its values are BLOCKED:
+  # !!   software-engineering, debugging, data-processing  -> REJECTED OUTRIGHT.
+  # !! An LLM classifier reads your instruction.md and shipped source and predicts this itself;
+  # !! it never reads this file. Setting a legal value here does NOT make the task legal.
+  # !! Pick the one your PREMISE actually is. See the premise gate before you get here.
+  category = "<REQUIRED: NOT software-engineering / debugging / data-processing>"
   # Options for subcategories are: "long_context", "tool_specific", "api_integration", "db_interaction", "ui_building"
   subcategories = [ "long_context", "tool_specific",]
   # The number of milestones in the task (can be zero if not a milestone task)
   number_of_milestones = 0
   # Size of the codebase: minimal -> 0-20 files, small -> 20+ files, large -> 200+ files
-  codebase_size = "small"
+  # !! COUNT THE FILES, NEVER GUESS. This must match the ACTUAL file count under environment/,
+  # !! excluding Dockerfile and docker-compose:  <=20 -> "minimal",  20+ -> "small",  200+ -> "large"
+  # !!   find environment -type f | grep -v Dockerfile | wc -l
+  # !! Copying "small" from this template onto a 6-file environment is a real rejection we took.
+  codebase_size = "<REQUIRED: minimal | small | large — count them>"
   # Coding languages used in the oracle solution or required by the agent
   languages = [ "rego", "rust", "bash",]
   # For tool_specific, api_integration, and db_interaction subcategories, please include specific tool, api framework, or database software
@@ -592,14 +700,36 @@ The rule of thumb: make the task hard because the PROBLEM is deep, not because t
 is long. Then aim the depth at a documented model weakness. Below are the levers, each mapped
 to the weakness catalogue.
 
-8.1 THE PARTIAL-SYMPTOM TRAP (targets Opus #16 "instruction compliance over adversarial
+8.1 THE UNDER-SPECIFIED-SPEC TRAP (targets Opus #16 "instruction compliance over adversarial
     checking", #19 "under-testing its own solutions", GPT #18 "literalness gap")
-    Name N observed symptoms in the instruction. Plant N+K real defects. Say plainly that you
-    do not trust the rest of the system. A literal-compliance model fixes exactly the N named
-    bugs, self-certifies, and fails on the K it never went looking for. The accepted task names
-    2 symptoms and plants 5 defects. This one lever alone does most of the work.
-    Make the K unnamed defects SUBTLE: an omitted validity window, a missing member of a
-    protected set, a comparison that ignores one of two fields.
+
+    !!! THE PREVIOUS VERSION OF THIS SECTION IS WHY OUR FIRST TWO SUBMISSIONS WERE REJECTED. !!!
+
+    It said: "Name N observed symptoms in the instruction. Plant N+K real defects... The accepted
+    task names 2 symptoms and plants 5 defects. This one lever alone does most of the work."
+
+    That is a DEFECT HUNT. A defect hunt classifies as occupation "Software Developers" or
+    "Software Quality Assurance Analysts and Testers", and as category "debugging" or
+    "software-engineering". EVERY ONE OF THOSE IS BLOCKED. The task is rejected before anyone
+    reads it. Do not plant defects. Do not ask the agent to find anything that is "wrong".
+
+    THE LEVER, REBUILT — same psychology, legal premise:
+
+    Nothing in the environment is ever IN ERROR. The shipped values are legitimately correct for
+    a PRIOR version, policy or configuration, and they are labelled as such. The agent's job is to
+    DERIVE the CURRENT definition from the shipped specification and BUILD the current artifact.
+
+    Name N requirements of the current spec in the instruction. The specification contains N+K.
+    Say plainly that the instruction is a summary and the specification is authoritative. A
+    literal-compliance model implements exactly the N it was told, self-certifies, and fails the K
+    it never went looking for — the identical failure mode, with none of the blocked framing.
+
+    Make the K unnamed requirements SUBTLE and SPEC-DERIVED: a validity window the current tariff
+    adds, a member of a protected set the new policy includes, a comparison the revised rule makes
+    on two fields where the old one used one.
+
+    The agent is not hunting your mistakes. It is implementing a specification you gave it, and
+    the specification is bigger than the summary. That is the whole trick, and it is legal.
 
 8.2 SPEC-VS-IMPLEMENTATION CONFLICT (targets GPT #7 "external documentation verification gap",
     GPT #26 "overconfidence on ambiguous data", Opus #18 "long-context detail distraction")

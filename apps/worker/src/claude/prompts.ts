@@ -76,7 +76,74 @@ Non-negotiables, checked mechanically the moment you claim to be done:
    blank line between \`RC=$?\` and the \`if\`, and no trailing \`exit "$RC"\`.
 7. All files that run in the container (*.sh, *.py, Dockerfile) must use LF line endings.
 
-8. CATEGORY IS SUBSTANCE, NOT LABEL. This is the rule that gets tasks rejected.
+8. THE PREMISE GATE. DECIDE THIS BEFORE YOU CREATE A SINGLE FILE.
+
+   There are TWO independent classifiers, and each one can reject the task on its own. Both read
+   the task's CONTENT. NEITHER reads task.toml. You cannot pass either one by relabelling.
+
+   8a. THE OCCUPATION CLASSIFIER — "what job does the person who filed this ticket hold?"
+
+   Snorkel predicts an OCCUPATION from your task and rejects it outright if the answer is on this
+   list. Verbatim, from Sector.txt:
+
+     NO LONGER ACCEPTING SUBMISSIONS in these occupations:
+       Financial Managers
+       Accountants and Auditors
+       Financial and Investment Analysts
+       Software Quality Assurance Analysts and Testers
+       Data Scientists
+       Software Developers            <-- read that one again
+
+     ...and these additionally FAIL the Occupation Diversity Eval:
+       Business Intelligence Analysts, Financial Managers, Financial and Investment Analysts,
+       Medical and Health Services Managers, Software Quality Assurance Analysts and Testers,
+       Software Developers, Accountants and Auditors, Registered Nurses, Sales Representatives of
+       Services, Data Scientists, News Analysts/Reporters/Journalists, Acute Care Nurses,
+       Medical Scientists, Education Administrators (Postsecondary)
+
+   The mapping is direct and it is why our first two submissions died:
+     a defect hunt in a source file   -> "Software Developers" / "QA Analysts and Testers". BLOCKED.
+     an ETL / parse / transform / report pipeline -> "Data Scientists". BLOCKED.
+
+   A GENERIC CODING EXERCISE IS ALWAYS "SOFTWARE DEVELOPERS". That is the default prediction for
+   any task whose premise is "here is some code, do something to it". There is no wording that
+   escapes it, because the classifier is not reading for wording.
+
+   8b. THE DEFENCE IS A BUSINESS DOMAIN, NOT A DISCLAIMER.
+
+     OUR ASSIGNED SECTOR IS: Retail Trade.
+
+     Allowed sectors, verbatim: Agriculture, Forestry, Fishing and Hunting; Mining, Quarrying,
+     and Oil and Gas Extraction; Utilities; Retail Trade; Accommodation and Food Services;
+     Wholesale Trade; Transportation and Warehousing.
+
+   Set the task inside a real business in that sector, and make the DELIVERABLE A BUSINESS
+   DECISION ARTIFACT that happens to require deep engineering — not a code artifact that happens
+   to sit in a business-shaped folder.
+
+     WRONG (this is what we kept building):
+       "migrate the ImageMagick textile feature extractor to C + SQLite"
+       -> the ticket was filed by a Software Developer. Dead on arrival.
+
+     RIGHT:
+       "reconcile the freight-rating rules for a wholesale distributor's carrier contracts"
+       "compute the markdown-eligibility determination for a grocery chain's perishables"
+       "validate a rail carrier's hazmat manifest against the current tariff schedule"
+       -> the ticket was filed by a logistics analyst, a category manager, a compliance officer.
+          The engineering underneath is exactly as hard. The DOMAIN is what moved.
+
+   THE ENGINEERING DOES NOT GET EASIER. The domain changes; the difficulty does not.
+
+   8c. WRITE THIS DOWN BEFORE YOU CONTINUE, in one sentence:
+
+     "The person who would file this ticket holds the job title: ______."
+
+   If that title is Software Developer, QA Analyst, or Data Scientist, THE TASK IS ALREADY DEAD.
+   Change the DOMAIN — not the label, not the wording, not the tags. Go back and change what the
+   task is ABOUT. We have burned two submissions relabelling a task after the fact: the first
+   escaped software-engineering by relabelling and was immediately blocked as data-processing.
+
+8d. CATEGORY IS SUBSTANCE, NOT LABEL. This is the rule that gets tasks rejected.
    The category is decided by an LLM CLASSIFIER THAT READS THE TASK'S CONTENT — instruction.md,
    the source you ship, solve.sh, the test names. It NEVER reads task.toml. Snorkel BLOCKS
    \`software-engineering\`, \`debugging\` and \`data-processing\`: if the classifier puts your task

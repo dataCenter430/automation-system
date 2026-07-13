@@ -4,106 +4,7 @@ Read this end to end before you touch a file. It is the spec you will be graded 
 
 You are about to build ONE complete Terminus Edition-2 task from scratch. Everything you need
 to know about what "acceptable" means is in this document. Follow it literally. Where you are
-tempted to improvise on structure, don't — improvise on the *task idea*, never on the contract.
-
-
-================================================================================
-SECTION 0. THE PREMISE GATE — DECIDE THIS BEFORE YOU CREATE A SINGLE FILE
-================================================================================
-
-Nothing else in this document matters if you fail this gate. It is not a formatting rule and it
-cannot be patched afterwards: it is a property of WHAT THE TASK IS ABOUT.
-
-TWO INDEPENDENT CLASSIFIERS READ YOUR TASK'S CONTENT. Either one can reject it on its own.
-NEITHER of them reads task.toml. You cannot pass either by relabelling.
-
-
---- 0.1  THE OCCUPATION CLASSIFIER -------------------------------------------------------------
-
-Snorkel predicts an OCCUPATION from the task's content and rejects it outright if the answer is
-on this list. Verbatim from Sector.txt:
-
-  NO LONGER ACCEPTING SUBMISSIONS in these occupations:
-    Financial Managers
-    Accountants and Auditors
-    Financial and Investment Analysts
-    Software Quality Assurance Analysts and Testers
-    Data Scientists
-    Software Developers                      <-- read that one again
-
-  These additionally FAIL the Occupation Diversity Eval:
-    Business Intelligence Analysts, Financial Managers, Financial and Investment Analysts,
-    Medical and Health Services Managers, Software Quality Assurance Analysts and Testers,
-    Software Developers, Accountants and Auditors, Registered Nurses, Sales Representatives of
-    Services (Except Advertising, Insurance, Financial Services, and Travel), Data Scientists,
-    News Analysts/Reporters/Journalists, Acute Care Nurses, Medical Scientists (Except
-    Epidemiologists), Education Administrators (Postsecondary)
-
-A GENERIC CODING EXERCISE IS ALWAYS PREDICTED "SOFTWARE DEVELOPERS". That is the default answer
-for any task whose premise is "here is some code, do something to it". No wording escapes it,
-because the classifier is not reading for wording.
-
-  a defect hunt in a source file        -> Software Developers / QA Analysts.  BLOCKED.
-  an ETL / parse / transform / report   -> Data Scientists.                    BLOCKED.
-
-Both of those are submissions we actually shipped, and both were rejected.
-
-
---- 0.2  THE CATEGORY CLASSIFIER ---------------------------------------------------------------
-
-A second LLM classifier reads instruction.md, the shipped source, solve.sh and the TEST NAMES,
-and predicts a `category`. Three values are BLOCKED and reject the task outright:
-
-    software-engineering        debugging        data-processing
-
-It never reads task.toml. Putting a legal value in the enum does not make the task legal.
-
-
---- 0.3  THE DEFENCE IS A BUSINESS DOMAIN, NOT A DISCLAIMER ------------------------------------
-
-    OUR ASSIGNED SECTOR IS:  Retail Trade
-
-    Allowed sectors, verbatim:
-      Agriculture, Forestry, Fishing, and Hunting
-      Mining, Quarrying, and Oil and Gas Extraction
-      Utilities
-      Retail Trade
-      Accommodation and Food Services
-      Wholesale Trade
-      Transportation and Warehousing
-
-Set the task inside a REAL BUSINESS in that sector, and make the deliverable A BUSINESS DECISION
-ARTIFACT that happens to require deep engineering — not a code artifact that happens to sit in a
-business-shaped folder.
-
-  WRONG — this is what we kept building, and it is dead on arrival:
-    "migrate the ImageMagick textile feature extractor to C + SQLite"
-    "automate the Graphviz worker for the stained-glass vault"
-       -> the ticket was filed by a Software Developer.
-
-  RIGHT:
-    "reconcile the freight-rating rules for a wholesale distributor's carrier contracts"
-    "compute markdown eligibility for a grocery chain's perishable inventory"
-    "validate a rail carrier's hazmat manifest against the current tariff schedule"
-       -> filed by a logistics analyst, a category manager, a compliance officer.
-
-THE ENGINEERING DOES NOT GET EASIER. The domain moves; the difficulty does not. Everything in
-SECTION 8 (the hardness levers) still applies, and applies inside the business domain.
-
-
---- 0.4  THE GATE ------------------------------------------------------------------------------
-
-Before you create a single file, write this sentence down and answer it:
-
-    "The person who would file this ticket holds the job title: ____________."
-
-If that title is Software Developer, Software QA Analyst, or Data Scientist — THE TASK IS ALREADY
-DEAD. Do not adjust the wording. Do not change the tags. Do not pick a different enum value.
-GO BACK AND CHANGE WHAT THE TASK IS ABOUT.
-
-We have burned two submissions relabelling a task after the fact. The first escaped
-software-engineering by relabelling, and was immediately blocked as data-processing. Renaming the
-field does not move the classifier. Rewriting the premise does.
+tempted to improvise on structure, do not: improvise on the TASK IDEA, never on the contract.
 
 
 ================================================================================
@@ -112,7 +13,7 @@ SECTION 1. THE MANDATE
 
 Build a task that frontier models FAIL.
 
-The acceptance bar, stated bluntly:
+The acceptance bar:
 
   - Target pass rate for GPT-5.5 and Claude Opus 4.8: 0% to 20%. That is the "hard" band.
   - A task whose WORST model scores above 80% is REJECTED outright. No appeal.
@@ -120,11 +21,11 @@ The acceptance bar, stated bluntly:
   - The ORACLE (solution/solve.sh) must pass: reward.txt == 1.
   - The NULL / NOP run (agent does nothing) must fail: reward.txt == 0.
   - Difficulty must be earned by genuine engineering depth, NOT by piling on instructions.
-    A task that is hard only because it has 30 fiddly requirements is explicitly rejected
-    ("If a task is primarily hard due to a large number of edge cases/requirements that are
-    not handled well, it should be rejected"). Hard means the *problem* is hard.
+    A task that is hard only because it has many fiddly requirements is explicitly rejected:
+    "If a task is primarily hard due to a large number of edge cases/requirements that are
+    not handled well, it should be rejected." Hard means the PROBLEM is hard.
 
-Difficulty bands (from Task Requirements.txt — this is the authoritative table):
+Difficulty bands, verbatim from Task Requirements.txt (this is the authoritative table):
 
   Hard    accuracy <= 20% on the best model, OR <= 20% on the worst model
   Medium  20% < accuracy <= 60% on the worst model
@@ -139,11 +40,98 @@ verification pass after you declare done:
   INVARIANT A (oracle):   run solve.sh, then tests/test.sh  ->  /logs/verifier/reward.txt == 1
   INVARIANT B (null run): run NOTHING, then tests/test.sh   ->  /logs/verifier/reward.txt == 0
 
-If either fails, the build is bounced back to you. See Section 11.
+If either fails, the build is bounced back to you.
 
 
 ================================================================================
-SECTION 2. EXACT DIRECTORY STRUCTURE (NON-MILESTONE — THIS IS THE DEFAULT)
+SECTION 2. OCCUPATION & SECTOR -- THE CLASSIFIER YOU CANNOT SEE
+================================================================================
+
+RULE: OCCUPATION & SECTOR
+
+Nothing else in this document matters if you fail this gate. It is not a formatting rule and
+it cannot be patched afterwards: it is a property of WHAT THE TASK IS ABOUT.
+
+A content-based CLASSIFIER -- the Occupation Diversity Eval -- reads the task's CONTENT and
+PREDICTS an occupation from it. If the prediction lands in the blocked list, the submission
+FAILS, and no field in task.toml can save it: the `category` enum in task.toml and this
+predicted occupation are UNRELATED, and the playbook must say so in those words.
+
+This is the FIRST decision of a build, before a single file exists. You cannot patch it in
+afterwards. It is a property of the premise.
+
+
+--- 2.1 BLOCKED OCCUPATIONS (verbatim from Sector.txt) ---
+
+NO LONGER ACCEPTING SUBMISSIONS in these occupations:
+  Financial Managers
+  Accountants and Auditors
+  Financial and Investment Analysts
+  Software Quality Assurance Analysts and Testers
+  Data Scientists
+  Software Developers
+
+LESS THAN 10 SUBMISSIONS LEFT (warning):
+  Medical and Health Service Managers
+  Registered Nurses
+
+OCCUPATION DIVERSITY EVAL WILL FAIL for these occupations:
+  Business Intelligence Analysts
+  Financial Managers
+  Financial and Investment Analysts
+  Medical and Health Services Managers
+  Software Quality Assurance Analysts and Testers
+  Software Developers
+  Accountants and Auditors
+  Registered Nurses
+  Sales Representatives of Services, Except Advertising, Insurance, Financial Services, and Travel
+  Data Scientists
+  News Analysts, Reporters, and Journalists
+  Acute Care Nurses
+  Medical Scientists, Except Epidemiologists
+  Education Administrators, Postsecondary
+
+
+--- 2.2 ALLOWED SECTOR WHITELIST (verbatim from the Agriculture/Forestry doc) ---
+
+  Agriculture, Forestry, Fishing, and Hunting
+  Mining, Quarrying, and Oil and Gas Extraction
+  Utilities
+  Retail Trade
+  Accommodation and Food Services
+  Wholesale Trade
+  Transportation and Warehousing
+
+
+--- 2.3 THE DEFENCE ---
+
+A generic coding exercise classifies as "Software Developers" or "Data Scientists" -- both
+are BLOCKED -- so the task must be set inside an assigned sector's business domain (retail,
+wholesale, logistics, utilities, agriculture, food service) so that the classifier predicts a
+domain occupation instead. The engineering stays hard; the DOMAIN is what changes.
+
+  WRONG -- classifies as Software Developers / QA Analysts / Data Scientists:
+    "migrate the ImageMagick textile feature extractor to C + SQLite"
+    "automate the Graphviz worker for the stained-glass vault"
+    "write an ETL pipeline to parse customer logs"
+    "find and fix the defects in this code"
+
+  RIGHT -- classifies by domain occupation:
+    "reconcile the freight-rating rules for a wholesale distributor's carrier contracts"
+    "compute markdown eligibility for a grocery chain's perishable inventory"
+    "validate a rail carrier's hazmat manifest against the current tariff schedule"
+
+Before you create a single file, write this sentence down and answer it:
+
+    "The person who would file this ticket holds the job title: ____________."
+
+If that title is Software Developer, Software QA Analyst, or Data Scientist -- THE TASK IS
+ALREADY DEAD. Do not adjust the wording. Do not change the tags. Do not pick a different enum
+value. GO BACK AND CHANGE WHAT THE TASK IS ABOUT.
+
+
+================================================================================
+SECTION 3. EXACT DIRECTORY STRUCTURE
 ================================================================================
 
 Unless you have a specific reason to build a milestone task, build a NON-MILESTONE task.
@@ -172,7 +160,7 @@ Rules:
   - Everything the image builds from lives under environment/. The build context is
     environment/ ONLY. Never reach outside it (no docker-compose `context: ../`).
   - solution/ and tests/ are NEVER copied into the image. They are mounted at runtime.
-  - Runtime mount points reserved by the Harbor harness — do not remap or shadow them:
+  - Runtime mount points reserved by the Harbor harness -- do not remap or shadow them:
         /tests/            (your tests/ directory)
         /solution/         (your solution/ directory)
         /logs/verifier/    (reward.txt, ctrf.json)
@@ -180,16 +168,19 @@ Rules:
   - Do not leave junk in the task root: no jobs/, no stray data/, no CLAUDE.md, no skills.md,
     no AI-scaffolding filenames of any kind. Those are an automatic authenticity flag.
 
+MILESTONE TASKS (only if you have a specific reason):
+
 If (and only if) you build a milestone task: there is NO root instruction.md / tests/ /
-solution/. Instead steps/milestone_N/{instruction.md, tests/{test.sh,test_mN.py},
+solution/. Instead use steps/milestone_N/{instruction.md, tests/{test.sh,test_mN.py},
 solution/{solve.sh,solveN.sh}}, one [[steps]] block per milestone in task.toml,
 number_of_milestones must equal the [[steps]] count, [environment] gains workdir, and there
 are no top-level [agent]/[verifier] blocks (they become [steps.agent]/[steps.verifier]).
-2 to 5 milestones max. Each milestone must be a hard prerequisite of the next.
+2 to 5 milestones max. Each milestone must be a hard prerequisite of the next. Files persist
+across milestones. The container filesystem is shared between milestones.
 
 
 ================================================================================
-SECTION 3. task.toml — THE MANIFEST
+SECTION 4. task.toml -- THE MANIFEST
 ================================================================================
 
 Copy this shape exactly. Every key below is required. validate_task_fields is a BLOCKING CI
@@ -203,49 +194,34 @@ check; a missing or misspelled key fails the submission.
   author_name = "anonymous"
   author_email = "anonymous"
   difficulty = "hard"
-  # !! category is a CLOSED VOCABULARY and three of its values are BLOCKED:
-  # !!   software-engineering, debugging, data-processing  -> REJECTED OUTRIGHT.
-  # !! An LLM classifier reads your instruction.md and shipped source and predicts this itself;
-  # !! it never reads this file. Setting a legal value here does NOT make the task legal.
-  # !! Pick the one your PREMISE actually is. See the premise gate before you get here.
-  category = "<REQUIRED: NOT software-engineering / debugging / data-processing>"
-  # Options for subcategories are: "long_context", "tool_specific", "api_integration", "db_interaction", "ui_building"
-  subcategories = [ "long_context", "tool_specific",]
-  # The number of milestones in the task (can be zero if not a milestone task)
+  category = "<REQUIRED: see closed vocabulary below>"
+  subcategories = [ ]
   number_of_milestones = 0
-  # Size of the codebase: minimal -> 0-20 files, small -> 20+ files, large -> 200+ files
-  # !! COUNT THE FILES, NEVER GUESS. This must match the ACTUAL file count under environment/,
-  # !! excluding Dockerfile and docker-compose:  <=20 -> "minimal",  20+ -> "small",  200+ -> "large"
-  # !!   find environment -type f | grep -v Dockerfile | wc -l
-  # !! Copying "small" from this template onto a 6-file environment is a real rejection we took.
-  codebase_size = "<REQUIRED: minimal | small | large — count them>"
-  # Coding languages used in the oracle solution or required by the agent
-  languages = [ "rego", "rust", "bash",]
-  # For tool_specific, api_integration, and db_interaction subcategories, please include specific tool, api framework, or database software
-  tags = [ "open-policy-agent", "rego", "json-schema", "cargo", "governance",]
-  # Estimated time to complete (minutes)
-  expert_time_estimate_min = 150
-  junior_time_estimate_min = 360
+  codebase_size = "<REQUIRED: minimal | small | large -- see rule below>"
+  languages = [ "bash" ]
+  tags = [ "tag1", "tag2", "tag3" ]
+  expert_time_estimate_min = 60
+  junior_time_estimate_min = 120
 
   # Verifier: runs the test script to check task completion
   [verifier]
-  timeout_sec = 600.0
+  timeout_sec = 450.0
 
   # Agent: limits how long the agent can run when attempting the task
   [agent]
-  timeout_sec = 1800.0
+  timeout_sec = 900.0
 
   # Sandbox environment limits
   [environment]
-  allow_internet = false
-  build_timeout_sec = 1200.0
+  build_timeout_sec = 600.0
   cpus = 2
   memory_mb = 4096
   storage_mb = 10240
+  allow_internet = false
 
 DO NOT change author_name / author_email. Leave them as "anonymous". Explicit instruction.
 
-CLOSED VOCABULARY — category. Exactly ONE of these nine. Never invent a value:
+CLOSED VOCABULARY -- category. Exactly ONE of these nine. Never invent a value:
 
   system-administration
   build-and-dependency-management
@@ -257,7 +233,13 @@ CLOSED VOCABULARY — category. Exactly ONE of these nine. Never invent a value:
   security
   scientific-computing
 
-CLOSED VOCABULARY — subcategories. Zero or more of these five (empty list is legal):
+WARNING: Three category values are BLOCKED by a separate classifier that reads your content:
+  software-engineering        debugging        data-processing
+An LLM classifier reads instruction.md and the shipped source and predicts the category
+itself; it never reads task.toml. Setting a legal value in the enum does NOT make the task
+legal if the content classifies into a blocked category. See SECTION 2.
+
+CLOSED VOCABULARY -- subcategories. Zero or more of these five (empty list is legal):
 
   long_context
   tool_specific
@@ -265,33 +247,43 @@ CLOSED VOCABULARY — subcategories. Zero or more of these five (empty list is l
   db_interaction
   ui_building
 
-  long_context carries an extra bar you must actually meet — see Section 8.6. Do not label a
+  long_context carries an extra bar you must actually meet -- see SECTION 9. Do not label a
   task long_context unless it ships >= 50k tokens of real prose that cannot be grepped.
   ui_building forces the UI task skeleton; avoid it.
 
-codebase_size — categorical, counts files IN THE ENVIRONMENT the agent works with (not files
-the agent produces):
-  minimal  ~0-20 files
-  small    ~20+ files
-  large    ~200+ files
 
-difficulty — "hard" (you are building hard). Other legal values: "medium", "easy".
+RULE: CODEBASE_SIZE
 
-languages — the languages of the oracle solution / required of the agent. CRITICAL RULE:
-do NOT add "python" just because your verifier tests are pytest. Verifier language is not
-task language. If the task is mainly C# with a sprinkle of Python, list only C#.
+This rule is enforced by the validate_task_fields CI check, which is BLOCKING.
 
-tags — 3 to 6 free-form keywords naming tools/libraries/techniques (e.g. "ffmpeg", "redis",
-"open-policy-agent"). If you used tool_specific / api_integration / db_interaction, the
-specific tool/framework/database MUST appear in tags.
+codebase_size is a categorical label (not a literal file count); count environment files the
+agent works with, not outputs the agent produces. Verbatim from Task Requirements.txt:
 
-HARD LIMITS you must not violate:
+  minimal    0-20 files
+  small      20+ files
+  large      200+ files
 
-  [agent] timeout_sec         must be between 1 and 1800 (seconds). 1800 is the ceiling.
-                              Do not design a task that needs more than 30 agent-minutes.
-  [verifier] timeout_sec      keep realistic; 450-600 is the normal range. Your whole test
-                              suite (including any fuzzing / subprocess work) must finish
-                              inside it with margin.
+Counting procedure: count the files actually shipped under environment/ after .dockerignore
+exclusions, then cross-check the declared band.
+
+  find environment -type f | grep -v Dockerfile | wc -l
+
+If the count is 6, declare "minimal". Copying "small" from a template onto a 6-file
+environment is a real rejection we have taken. Do not guess.
+
+
+difficulty -- "hard" (you are building hard). Other legal values: "medium", "easy".
+
+languages -- the languages of the oracle solution / required of the agent. Do NOT add "python"
+just because your verifier tests are pytest. Verifier language is not task language.
+
+tags -- 3 to 6 free-form keywords naming tools/libraries/techniques. If you used tool_specific
+/ api_integration / db_interaction, the specific tool/framework/database MUST appear in tags.
+
+HARD LIMITS:
+
+  [agent] timeout_sec         must be between 1 and 1800 seconds. 1800 is the ceiling.
+  [verifier] timeout_sec      keep realistic; 450-600 is the normal range.
   [environment] allow_internet  MUST be false. This is a blocking static check. There is NO
                               NETWORK at agent time or at test time.
   [environment] build_timeout_sec  bounded; 600-1200 depending on compile weight.
@@ -300,11 +292,11 @@ HARD LIMITS you must not violate:
 
 If your task uses docker-compose.yaml, add custom_docker_compose = true to [metadata], and if
 it is multi-container also add is_multi_container = true. Every `image:` line in compose must
-also be digest-pinned. Prefer a single Dockerfile; compose is extra review surface.
+also be digest-pinned.
 
 
 ================================================================================
-SECTION 4. environment/Dockerfile AND .dockerignore
+SECTION 5. environment/Dockerfile AND .dockerignore
 ================================================================================
 
 Three Dockerfile CI checks BLOCK by default:
@@ -312,7 +304,10 @@ Three Dockerfile CI checks BLOCK by default:
   check_sanctioned_base_images final runtime base image is sanctioned (or justified)
   check_build_context_size     environment/ <= 100 MiB total, no file > 50 MiB
 
-4.1 SANCTIONED BASE IMAGES — use these exact strings verbatim. They are load-bearing.
+
+--- 5.1 SANCTIONED BASE IMAGES ---
+
+Use these exact strings verbatim. They are load-bearing.
 
 Language runtimes:
 
@@ -353,68 +348,103 @@ Distro bases (minimal / custom images):
 Also accepted by the sanctioned-image check as families: python:*@sha256:<digest>,
 mcr.microsoft.com/...@sha256:<digest>, ghcr.io/snorkel-ai/...@sha256:<digest>, and scratch.
 
-Each canonical row collapses a whole family (the Python row covers 3.10-3.13 slim/non-slim,
-the Go row covers 1.21-1.26, etc.) — take the canonical row, do not go hunting for a variant.
 If you genuinely need a non-canonical base, you MUST put a credible one-line justification in
-a Dockerfile comment or README.md. Missing/vague/boilerplate justification = BLOCKED. Do not
-justify a non-canonical image when a canonical one would have worked; a reviewer will reject
-that on sight. Builder stages in a multi-stage build may use any toolchain image (still
-digest-pinned); only the FINAL runtime stage is checked for sanction.
+a Dockerfile comment or README.md. Missing/vague/boilerplate justification = BLOCKED.
 
-NOTE ON THE GO DIGEST: the two source docs disagree by two characters on the Go digest
-(...540c06173... vs ...540ce6173...). The canonical-image doc is the designated source of
-truth and is reproduced above. If you use Go, verify the digest resolves before you rely on it;
-if it does not, prefer a different canonical base or record a justification.
 
-4.2 THE THREE THINGS THAT GET DOCKERFILES REJECTED
+RULE: MULTI-STAGE
+
+Use multi-stage builds whenever the Dockerfile compiles or bundles artifacts. Trigger list,
+verbatim from the image best-practices docs:
+
+  cargo build
+  go build
+  mvn package
+  gradle build
+  npm ci && npm run build
+  dotnet publish
+  C/C++ builds with make/cmake
+
+CARVE-OUT: if the TASK requires the agent to compile or build code, leaving the toolchain in
+the final image is fine and expected.
+
+CI check: check_no_build_tools_in_runtime
+
+
+RULE: LOCKFILES
+
+Dependencies are hash-locked. This rule belongs in the DOCKERFILE section where a builder
+looks -- not buried in a checklist.
+
+Python installs must use a hash-locked requirements file including transitive deps, installed
+with:
+
+  pip install --require-hashes --no-deps -r <lockfile>
+
+A bare `pip install pkg==1.2.3` pin is NOT sufficient and gets flagged.
+
+Lockfile table, verbatim from snorkel_canonical_image_best_practices.md:
+
+  Language    Lockfile
+  Python      requirements.txt with exact versions / uv.lock / poetry.lock
+  Node        package-lock.json / pnpm-lock.yaml / yarn.lock
+  Rust        Cargo.lock
+  Go          go.mod and go.sum
+  JVM         Pinned Maven or Gradle dependency locks where possible
+
+Reproducible-build scanner: no `go build` in the runtime image; declare and resolve modules
+(`go mod edit` + `go mod tidy`) instead of fetching in a way that trips check_reproducible_builds.
+
+Pin downloaded binaries by version AND checksum:
+
+  ARG OPA_VERSION=0.70.0
+  ARG OPA_SHA256=00d114b94fdb1606a48cccdfc73c9ccdc62c38721150131ae578d5ff3df5c084
+  RUN curl -fsSL -o /usr/local/bin/opa \
+          "https://github.com/open-policy-agent/opa/releases/download/v${OPA_VERSION}/opa_linux_amd64_static" \
+      && echo "${OPA_SHA256}  /usr/local/bin/opa" | sha256sum -c - \
+      && chmod 0755 /usr/local/bin/opa
+
+Avoid curl | sh unless the artifact is version-pinned and checksum-verified.
+
+
+--- 5.2 THINGS THAT GET DOCKERFILES REJECTED ---
 
   (a) Unbaked verifier dependencies. There is NO NETWORK at test time. test.sh cannot
       pip install / apt-get install / curl / wget / npm install / cargo fetch anything.
-      Therefore EVERY verifier dependency must be baked into the image at build time:
+      EVERY verifier dependency must be baked into the image at build time:
 
         RUN python3 -m pip install --no-cache-dir --break-system-packages \
                 pytest==8.4.1 \
                 pytest-json-ctrf==0.3.5 \
                 jsonschema==4.23.0
 
-      pytest AND pytest-json-ctrf are mandatory (test.sh emits a CTRF report). Add whatever
-      else your test_outputs.py imports. Every version exactly pinned — pinned_dependencies
-      is a blocking check. This is the single most common cause of a task that "works locally"
-      and dies in CI.
+      pytest AND pytest-json-ctrf are mandatory (test.sh emits a CTRF report).
 
   (b) Solution or tests baked into the image. tests_or_solution_in_image is a blocking check.
-      NEVER `COPY tests/ ...` or `COPY solution/ ...` or `COPY ../solution ...`. They are
-      mounted at /tests and /solution at runtime. Do not store expected outputs, ground truth,
-      or hidden fixtures anywhere the agent can read or write.
+      NEVER `COPY tests/ ...` or `COPY solution/ ...`. They are mounted at /tests and
+      /solution at runtime.
 
   (c) Unpinned anything. Every FROM needs @sha256. Every pip/npm/cargo/gem package needs an
-      exact ==version pin. Any downloaded binary needs a version AND a sha256sum -c check:
+      exact ==version pin.
 
-        ARG OPA_VERSION=0.70.0
-        ARG OPA_SHA256=00d114b94fdb1606a48cccdfc73c9ccdc62c38721150131ae578d5ff3df5c084
-        RUN curl -fsSL -o /usr/local/bin/opa \
-                "https://github.com/open-policy-agent/opa/releases/download/v${OPA_VERSION}/opa_linux_amd64_static" \
-            && echo "${OPA_SHA256}  /usr/local/bin/opa" | sha256sum -c - \
-            && chmod 0755 /usr/local/bin/opa
 
-      (Build-time downloads are fine. Runtime downloads are not.)
+--- 5.3 REQUIRED RUNTIME CONTENTS ---
 
-4.3 REQUIRED RUNTIME CONTENTS
+tmux and asciinema MUST be installed in the final image. The agent harness starts a session
+with them. Missing either means EVERY agent run fails with no verifier output at all.
 
-  tmux and asciinema MUST be installed in the final image. The agent harness starts a session
-  with them. Missing either means EVERY agent run fails with no verifier output at all.
+  RUN apt-get update \
+      && apt-get install -y --no-install-recommends \
+          asciinema \
+          ca-certificates \
+          tmux \
+      && rm -rf /var/lib/apt/lists/*
 
-    RUN apt-get update \
-        && apt-get install -y --no-install-recommends \
-            asciinema \
-            ca-certificates \
-            tmux \
-        && rm -rf /var/lib/apt/lists/*
+One apt transaction per volatility class. Always --no-install-recommends. Always
+rm -rf /var/lib/apt/lists/* IN THE SAME RUN layer. Never apt-get upgrade.
 
-  One apt transaction per volatility class. Always --no-install-recommends. Always
-  rm -rf /var/lib/apt/lists/* IN THE SAME RUN layer. Never apt-get upgrade.
 
-4.4 LAYERING AND HYGIENE (warn-level checks, but reviewers send tasks back for these)
+--- 5.4 LAYERING AND HYGIENE ---
 
   - Order layers least-volatile to most-volatile: base -> apt -> dependency manifests ->
     dependency install -> source -> build step. WORKDIR /app.
@@ -424,13 +454,13 @@ if it does not, prefer a different canonical base or record a justification.
     COPY them. check_heredoc_usage flags this.
   - Extract archives at build time and delete the archive in the same layer.
   - No recursive chmod -R / chown -R across /app. Use COPY --chmod=0755 / COPY --chown=.
-  - Multi-stage build if you compile artifacts the agent does not need to rebuild. If the
-    agent must compile, leaving the toolchain in the final image is fine and expected.
-  - Add OpenContainers LABELs (title, description, version, licenses).
   - If the environment needs a pinned upstream repo, clone AND `git checkout <sha>` so the
     agent cannot see later commits containing the answer.
 
-4.5 environment/.dockerignore — REQUIRED for non-trivial environments. Use this template:
+
+--- 5.5 environment/.dockerignore ---
+
+REQUIRED for non-trivial environments. Use this template:
 
   .git
   .gitignore
@@ -452,11 +482,13 @@ if it does not, prefer a different canonical base or record a justification.
 
 
 ================================================================================
-SECTION 5. instruction.md — HOW THE PROMPT MUST SOUND
+SECTION 6. instruction.md -- HOW THE PROMPT MUST SOUND
 ================================================================================
 
+RULE: INSTRUCTION.MD
+
 instruction.md is what the model actually reads. It must read like a real engineer typing into
-a terminal agent at 4pm on a Tuesday — not like generated documentation.
+a terminal agent -- not like generated documentation.
 
 The six principles (all High severity; violating any one is a send-back):
 
@@ -464,26 +496,29 @@ The six principles (all High severity; violating any one is a send-back):
   2. WELL SPECIFIED. The goal is unambiguous. State the WHAT and the output contract.
   3. INTERESTING.    A real developer would find the problem worth solving.
   4. NO ANSWERS, NO HINTS. Requirements yes. Steps, algorithms, thresholds, detection
-                     guidance, function signatures — no.
+                     guidance, function signatures -- no.
   5. UNIQUE.         Not a re-skin of anything in Terminal-Bench 2/3 or Terminus Edition 1.
   6. ABSOLUTE PATHS. Every path referenced is absolute: /app/policy, /app/out/report.json.
                      Never `config/settings.json`, never `./data`.
 
+RATING: BLOCKING. Review Checklist.md rates hints and STEPWISE INSTRUCTIONS as High severity.
+The Blocking Issues doc lists the instruction.md rewrite among the blockers.
+
 Hard prohibitions:
 
   - No emojis. Not one.
-  - Minimal markdown. No #### headers, no nested bullet trees, no bold-marker highlighting of
-    "important" values (that is just hint-dropping with extra steps).
-  - No canary string. Canary strings are NOT required in Terminus Edition 2 and their presence
-    signals you used an obsolete skeleton.
+  - Minimal markdown. No #### headers, no nested bullet trees, no bold-marker highlighting.
+  - No canary string. Canary strings are NOT required in Terminus Edition 2.
   - No task name / no title comment on the first line.
-  - No LLM-tell prose: "You are an expert programmer", "Your goal is to...", "Let's begin!",
-    verbose politeness, restating the problem three times.
+  - No LLM-tell prose: "You are an expert programmer", "Your goal is to...", "Let's begin!".
   - No tool prescriptions you cannot verify ("use vim to edit the file").
   - No vague verbs ("make it better", "fix the issues", "handle errors properly", "optimize").
-    Vague is not the same as unhinted. Be precise about the target, silent about the method.
 
-ANTI-EXAMPLES — each of these is a documented rejection:
+The same ban on LLM-tells extends to the environment fixtures: they must read like real
+internal artefacts -- no robotic meta-commentary, no 'Determination: ...' summaries, no note
+column that hands the agent the conclusion it was supposed to derive.
+
+ANTI-EXAMPLES (documented rejections):
 
   BAD (step-by-step walkthrough with solution values):
       "##### Step 3: Optimize the File Sync Utility
@@ -494,8 +529,7 @@ ANTI-EXAMPLES — each of these is a documented rejection:
 
   BAD (hints section describing the answers):
       "##### Detection Guidance
-       Look for: currency conversion anomalies that affect only specific currency codes;
-       date field values that are valid but transposed relative to the source; ..."
+       Look for: currency conversion anomalies that affect only specific currency codes..."
       -> A full taxonomy of the bugs. The task is now trivial.
 
   BAD (excessive markdown / API-doc styling):
@@ -504,53 +538,40 @@ ANTI-EXAMPLES — each of these is a documented rejection:
       -> Reads like generated documentation, not a human prompt.
 
   BAD (overly prescriptive):
-      "`backend/processor.py` — must export four functions:
+      "`backend/processor.py` -- must export four functions:
          apply_grayscale(input_path: Path, output_path: Path) -> Path ..."
       -> Dictates structure, library, signature. Nothing left to solve.
 
-  BAD (bold markers highlighting solution details):
-      "**Policy limit**: $500 USD per single expense.
-       **Compliance Rate Definition**: `1.0 - (violation_count / total_expenses)`"
-      -> Bolding the exact constants the agent was supposed to derive.
+GOOD CONTRAST (verbatim from instruciton_guide.txt):
 
-GOOD — this is the actual instruction.md from an accepted task. Study the register:
+  BAD:   "First, use the `ls` command to see files, then..."
+  GOOD:  "The source data is in /data. Output the result to..."
 
-  "The OPA/Rego bundle in /app/policy is supposed to enforce our WandB model-governance rules,
-   but it's misclassifying requests. Right now it waves through GPU inference deployments that
-   were never granted capacity, and it blocks production rollbacks that should go straight
-   through during an incident. Those are just the two cases we happened to catch — the bundle
-   is meant to implement the entire governance review at /app/docs/governance_review.md (the
-   current baseline is policy v4.2), and I don't trust that the rest of it is correct either.
-
-   Go through the review and fix the policies so every action it covers gets the decision the
-   review actually specifies: model registry promotions, Launch job overrides, and artifact
-   alias operations, including how time-bound governance exceptions and their expiry are
-   evaluated. The request fixtures we've been testing against are in /app/requests.
-
-   When the policy is right, run /app/run_audit.sh to regenerate the audit report at
-   /app/out/audit_report.json and confirm it passes the Cargo-based JSON Schema validator the
-   pipeline runs. A report that is schema-valid but contains wrong decisions is not done — the
-   decisions have to match the policy in the review."
-
-Notice what it does: names two symptoms out of five real defects; names the authoritative
-document but not the rules; names every absolute path the agent needs; states the output
-contract; explicitly closes the "schema-valid means done" false-green escape hatch; sounds
-irritated and human. Three paragraphs. No markdown. Copy this energy, not this task.
-
-Also: vary your voice between tasks. Some engineers are terse, some are chatty. Do not
-converge on a house style — the dataset is trying to capture real variance.
+Vary your voice between tasks. Some engineers are terse, some are chatty. Do not converge on
+a house style -- the dataset is trying to capture real variance.
 
 
 ================================================================================
-SECTION 6. tests/ — THE VERIFIER
+SECTION 7. tests/ -- THE VERIFIER
 ================================================================================
 
-6.1 tests/test.sh — CANONICAL. Reproduce this EXACTLY.
+RULE: RUFF
+
+EVERY Python file shipped in the submission is linted, not just the tests -- a single unused
+variable (F841) in a helper script is a documented BLOCKING failure. Do not ship tools/ or
+scratch scripts in the zip; they get linted too.
+
+Make it executable rather than aspirational: the builder RUNS `ruff check` over the task
+directory and it must come back clean before the task is declared done.
+
+
+--- 7.1 tests/test.sh -- CANONICAL ---
+
+Reproduce this EXACTLY:
 
 #!/bin/bash
 
 # Verifier dependencies are baked into environment/Dockerfile so the run is offline.
-# Add task-specific verifier-only Python packages there, not here.
 mkdir -p /logs/verifier
 
 python -m pytest -o cache_dir=/tmp/pytest_cache \
@@ -570,42 +591,32 @@ Non-negotiable details, each of which is a REAL documented rejection:
     the LAST thing in the file. A trailing exit gets you blocked.
   - NO `set -euo pipefail` in test.sh. It would abort the script the instant pytest fails,
     reward.txt would never be written, and the harness raises RewardNotFoundError.
-  - The reward is BINARY: exactly `1` or exactly `0`. Never a partial score, never a fraction
-    of tests passed.
+  - The reward is BINARY: exactly `1` or exactly `0`. Never a partial score.
   - reward.txt is written on BOTH paths. The verifier must never exit before assigning reward.
-  - No network calls of any kind in test.sh. check_offline_tests and check_test_sh enforce it.
-  - test.sh is a bash entry point ONLY. It runs pytest. It does not become a jest/go test/
-    cargo test runner. All assertions live in Python.
+  - No network calls of any kind in test.sh. check_offline_tests enforces it.
+  - test.sh is a bash entry point ONLY. It runs pytest. All assertions live in Python.
 
-6.2 tests/test_outputs.py — PYTEST ONLY
+
+--- 7.2 tests/test_outputs.py -- PYTEST ONLY ---
 
   - Python + pytest is mandatory for ALL tasks, regardless of task language. For non-Python
-    tasks, write Python tests that invoke the binary / API / service / output files. Need
-    browser automation? Use Playwright's PYTHON bindings from pytest, not a JS suite.
+    tasks, write Python tests that invoke the binary / API / service / output files.
   - Module docstring at the top explaining what the file validates. A docstring on EVERY test
-    function explaining the behavior being tested. informative_test_docstrings is an LLM-judge
-    blocking check.
-  - Every requirement in instruction.md maps to at least one test. Anything stated OR implied
-    in the prompt and not asserted is a `req-gap` flag. Conversely, do not test behavior the
-    instruction never asked for — that is a `phantom-spec` flag.
+    function explaining the behavior being tested. informative_test_docstrings is a blocking
+    LLM-judge check.
+  - Every requirement in instruction.md maps to at least one test.
   - Tests must be independent and order-free. No module-level globals shared between tests.
-  - Test BEHAVIOR, not implementation. Never grep the agent's source for `sorted(` or a
-    library name. Run the thing and check what it does.
-  - No brittle exact-string matching on human-readable output. (Byte-exact checks on a
-    machine-readable artifact you specified in the instruction ARE fine and often necessary.)
-  - Deterministic. No unseeded randomness, no wall-clock/latency dependence, no flakiness.
-    A flaky verifier is a High-severity reject.
-  - Same logic for the oracle run and the agent run. No conditional branches that treat them
-    differently.
-  - Don't sprawl. "Long test files are almost always wrong." Aim for a tight set of tests each
-    of which kills a distinct class of wrong solution.
+  - Test BEHAVIOR, not implementation. Never grep the agent's source for library names.
+  - No brittle exact-string matching on human-readable output.
+  - Deterministic. No unseeded randomness, no wall-clock dependence, no flakiness.
+  - Same logic for the oracle run and the agent run. No conditional branches.
   - Tests must check CORRECTNESS, not just format. Existence + schema-validity alone is a
-    rejection. Files exist, schema validates, AND the values are right.
+    rejection.
 
-6.3 ANTI-CHEATING — THIS IS SCORED (anti_cheating_measures, hardcoded_solution)
 
-Your task WILL be rejected if the solution can be copied from the test assertions, if the
-output format reveals the answer structure, if hardcoded values pass, or if an agent can guess.
+--- 7.3 ANTI-CHEATING (scored by anti_cheating_measures, hardcoded_solution checks) ---
+
+Your task WILL be rejected if the solution can be copied from the test assertions.
 
 Required techniques:
 
@@ -613,52 +624,32 @@ Required techniques:
         BAD:  assert report["total"] == 42
         GOOD: expected = sum(item["value"] for item in json.load(open("/app/data/input.json")))
               assert report["total"] == expected
-      The test recomputes ground truth from the inputs. An agent that writes 42 into the file
-      still fails when the recomputation disagrees.
 
   (b) SHIP A REFERENCE ENGINE IN tests/oracle.py.
-      A self-contained Python implementation of the ACTUAL rules, living only in the verifier
-      (never in the image). Tests compare the agent's artifact/policy/binary against
-      oracle.decide(...) rather than against literals. This is how the accepted task does it.
+      A self-contained Python implementation of the ACTUAL rules, living only in the verifier.
+      Tests compare the agent's artifact against oracle.decide(...) rather than literals.
 
   (c) SHIP A HELD-OUT GENERATOR IN tests/heldout.py.
       A deterministic seeded generator of FRESH cases that are NOT present anywhere in the
-      container. At test time, generate N of them (the accepted task uses N=250, seed=12345),
-      run the agent's artifact on them, and compare to oracle.py. An agent that special-cases
-      the shipped fixtures — or hardcodes the report — cannot pass this. Make the generator
-      cover the full input space including the nasty corners.
+      container. At test time, generate N of them, run the agent's artifact on them, and
+      compare to oracle.py.
 
   (d) RE-EXECUTE THE AGENT'S ARTIFACT, DON'T TRUST ITS OUTPUT.
-      If the agent was asked to fix a policy/parser/service, don't just read the report it
-      produced — re-run the policy/parser/service yourself from the test and check the
-      decisions. Trusting the produced file is the classic hole.
+      If the agent was asked to fix a policy/parser/service, re-run it yourself from the test.
 
   (e) KEEP A VERIFIER-OWNED COPY OF ANY SCHEMA/SPEC THE TEST DEPENDS ON.
-      The accepted task ships tests/audit_report.schema.json, a private copy of
-      /app/schema/audit_report.schema.json. Weakening the in-container schema buys the agent
-      nothing. Never let the verifier derive ground truth from a file the agent can edit.
+      Weakening the in-container schema buys the agent nothing.
 
   (f) IDEMPOTENCY / DETERMINISM CHECK.
-      Re-run the agent's pipeline and assert the output is byte-identical. Catches
-      nondeterministic dict ordering, timestamps in output, unstable sorts.
+      Re-run the agent's pipeline and assert the output is byte-identical.
 
   (g) A NEGATIVE-CONTROL TRAP.
       Build in at least one way for the artifact to be structurally valid but semantically
-      wrong, and test the semantics. In the accepted task the report ALWAYS passes the Cargo
-      schema validator even with completely wrong decisions — so an agent that stops at
-      "schema valid, done" gets reward 0. This directly punishes weakness #24 and #19.
-
-  Also: pytest inserts the test file's directory on sys.path, so `import oracle` and
-  `import heldout` from /tests/test_outputs.py work without packaging. Use it.
-
-6.4 RUFF
-  All Python in the submission (tests, any helper scripts) must pass ruff. A single unused
-  variable (F841) is a documented blocking failure. Do not ship tools/ or scratch scripts in
-  the zip — they get linted too.
+      wrong, and test the semantics.
 
 
 ================================================================================
-SECTION 7. solution/solve.sh — THE ORACLE
+SECTION 8. solution/solve.sh -- THE ORACLE
 ================================================================================
 
   #!/bin/bash
@@ -670,215 +661,105 @@ Requirements:
 
   - Bash. Starts with `#!/bin/bash` and `set -euo pipefail` (unlike test.sh, where it is
     forbidden).
-  - HUMAN-WRITTEN in style: clear, commented, purposeful. Explain WHAT each fix is and WHY.
-    The accepted solve.sh opens with a comment block enumerating the five defects it repairs.
-  - DERIVES the answer. It must be a real implementation of the task, not a script that echoes
-    the expected outputs into place. `echo "42" > /output/result.txt` is an instant reject.
-    The oracle must "cover every requirement outlined in the instructions, not just those that
-    are tested."
+  - HUMAN-WRITTEN in style: clear, commented, purposeful.
+  - DERIVES the answer. It must be a real implementation, not a script that echoes the
+    expected outputs into place. `echo "42" > /output/result.txt` is an instant reject.
   - DETERMINISTIC. Same bytes every run. Seed any randomness. `ls | sort`, not bare `ls`.
   - IDEMPOTENT. Running it twice must be safe and produce the same state.
-  - SELF-CONTAINED. No external deps, no network, no downloads. Everything it needs is already
-    in the image (allow_internet = false applies to the oracle too).
+  - SELF-CONTAINED. No external deps, no network, no downloads (allow_internet = false).
   - It must end by producing exactly the artifacts instruction.md promised, at the exact
-    absolute paths, and then invoking whatever pipeline the instruction told the agent to run.
-
-A useful pattern from the accepted task: solve.sh writes the corrected source files with
-heredocs (heredocs are banned in the Dockerfile, but they are fine in solve.sh) and then calls
-the real pipeline (`bash /app/run_audit.sh`) to generate the deliverable. The deliverable is
-computed by the environment's own tooling — never hand-authored by the oracle.
+    absolute paths.
 
 
 ================================================================================
-SECTION 8. HOW TO MAKE IT ACTUALLY HARD
+SECTION 9. HOW TO MAKE IT ACTUALLY HARD
 ================================================================================
 
-This is the section that decides whether the task is accepted. A structurally perfect task
-that Opus solves 90% of the time is worthless. You are engineering a failure.
+This section decides whether the task is accepted. A structurally perfect task that Opus
+solves 90% of the time is worthless. You are engineering a failure.
 
 The rule of thumb: make the task hard because the PROBLEM is deep, not because the INSTRUCTION
-is long. Then aim the depth at a documented model weakness. Below are the levers, each mapped
-to the weakness catalogue.
+is long. Then aim the depth at a documented model weakness.
 
-8.1 THE UNDER-SPECIFIED-SPEC TRAP (targets Opus #16 "instruction compliance over adversarial
-    checking", #19 "under-testing its own solutions", GPT #18 "literalness gap")
+9.1 THE SPEC-IMPLEMENTATION CONFLICT
+Ship an authoritative spec AND an implementation that disagrees with it. Make the
+implementation plausible. Models trust code over documents.
 
-    !!! THE PREVIOUS VERSION OF THIS SECTION IS WHY OUR FIRST TWO SUBMISSIONS WERE REJECTED. !!!
+9.2 SUPERSEDED-VALUE RED HERRINGS
+Inside a long document, include a clearly-marked HISTORICAL section listing OLD values.
+Mark them honestly so the task is fair. Scatter CURRENT values across distant sections.
 
-    It said: "Name N observed symptoms in the instruction. Plant N+K real defects... The accepted
-    task names 2 symptoms and plants 5 defects. This one lever alone does most of the work."
+9.3 CROSS-DOCUMENT STATE CONSISTENCY
+Require correctness that spans artifacts: derived totals must agree with per-item rows;
+ordering must be stable across files; IDs must reconcile. Test the reconciliation.
 
-    That is a DEFECT HUNT. A defect hunt classifies as occupation "Software Developers" or
-    "Software Quality Assurance Analysts and Testers", and as category "debugging" or
-    "software-engineering". EVERY ONE OF THOSE IS BLOCKED. The task is rejected before anyone
-    reads it. Do not plant defects. Do not ask the agent to find anything that is "wrong".
+9.4 EXACT OUTPUT CONTRACT
+Deterministic, byte-checkable output. Stable sort keys with a documented tie-break.
+Exact decimal precision. Newline at EOF.
 
-    THE LEVER, REBUILT — same psychology, legal premise:
+9.5 LONG-CONTEXT NEEDLE RETRIEVAL
+If you use the long_context subcategory you MUST clear this bar:
+  - >= 50k tokens of genuine document-like prose SHIPPED with the task.
+  - NOT JSON/JSONL/CSV/TSV/DB-dumps/uniform logs. Not filler, not boilerplate.
+  - The document must be AUTHORITATIVE to the solution.
+  - It must NOT be solvable by grep, keyword search, or field extraction.
+  - Rules must INTERACT across distant sections.
 
-    Nothing in the environment is ever IN ERROR. The shipped values are legitimately correct for
-    a PRIOR version, policy or configuration, and they are labelled as such. The agent's job is to
-    DERIVE the CURRENT definition from the shipped specification and BUILD the current artifact.
+9.6 CROSS-TOOL / MULTI-LANGUAGE BOUNDARIES
+Deliberately span boundaries: shell pipeline + policy DSL + compiled binary + JSON schema.
+Bias toward languages where models are weaker (Go, Rust, Rego, niche DSLs).
 
-    Name N requirements of the current spec in the instruction. The specification contains N+K.
-    Say plainly that the instruction is a summary and the specification is authoritative. A
-    literal-compliance model implements exactly the N it was told, self-certifies, and fails the K
-    it never went looking for — the identical failure mode, with none of the blocked framing.
+9.7 FALSE-GREEN SELF-VERIFICATION BAIT
+Give the environment a check that PASSES even when the work is wrong. A schema validator
+that only checks shape. A build that compiles. The model runs it, sees green, declares
+victory, and scores 0.
 
-    Make the K unnamed requirements SUBTLE and SPEC-DERIVED: a validity window the current tariff
-    adds, a member of a protected set the new policy includes, a comparison the revised rule makes
-    on two fields where the old one used one.
-
-    The agent is not hunting your mistakes. It is implementing a specification you gave it, and
-    the specification is bigger than the summary. That is the whole trick, and it is legal.
-
-8.2 SPEC-VS-IMPLEMENTATION CONFLICT (targets GPT #7 "external documentation verification gap",
-    GPT #26 "overconfidence on ambiguous data", Opus #18 "long-context detail distraction")
-    Ship an authoritative spec AND an implementation that disagrees with it. Make the
-    implementation *plausible* — it should look like something a competent engineer wrote.
-    Models trust the code they can see over the document they must read. The instruction must
-    make the document authoritative in one sentence and then say nothing more about it.
-
-8.3 SUPERSEDED-VALUE RED HERRINGS / TIE-BREAK RULES BURIED DEEP
-    (targets Opus #18, GPT #1 "long-context degradation", GPT #3 "instruction drift")
-    Inside a long document, include a clearly-marked HISTORICAL section listing OLD values for
-    the very constants the task turns on — a 14-day window that is now 30 days, a 4-GPU cap
-    that is now 8, a gate that used to apply only to production and now applies to every stage.
-    Mark them honestly ("HISTORICAL — do not apply superseded values") so the task is fair, and
-    scatter the CURRENT values across several distant sections so they cannot be grepped in
-    one pass. A model that keyword-searches "exception window" hits the wrong number first.
-    Put the decision-precedence / tie-break rule in a late section that only matters when two
-    rules fire at once — and then make sure some test cases fire two rules at once.
-
-8.4 CROSS-DOCUMENT / CROSS-FILE STATE CONSISTENCY (targets GPT #22 "data consistency across
-    related outputs", Opus #17 "exact output contract compliance")
-    Require correctness that spans artifacts: derived totals in a summary must agree with the
-    per-item rows; ordering must be stable across files; IDs and timestamps must reconcile
-    between two outputs. Then TEST the reconciliation, not just each file in isolation. Both
-    models fix one output correctly and forget the others.
-
-8.5 EXACT OUTPUT CONTRACT (targets Opus #17, GPT #5 "inconsistency in structured workflows",
-    GPT #23 "parser edge cases")
-    Deterministic, byte-checkable output. Stable sort keys with a documented tie-break. Sorted
-    key order. Exact decimal precision. Newline at EOF. Unknown-field preservation. Consistent
-    UTC conversion across a DST boundary. Specify the contract precisely in the instruction
-    (this is a requirement, not a hint) and then assert it byte-exactly.
-
-8.6 LONG-CONTEXT NEEDLE RETRIEVAL UNDER DISTRACTION (targets GPT #1: 45.4% vs Opus 68.1% at 1M
-    — this is the single widest documented gap between the two models)
-    If you use the long_context subcategory you MUST clear this bar:
-      - >= 50k tokens of genuine document-like prose SHIPPED with the task (the accepted task
-        ships ~63k words / ~3,100 lines of governance review).
-      - NOT JSON/JSONL/CSV/TSV/DB-dumps/uniform logs. Not filler, not repeated boilerplate,
-        not fifty tiny files.
-      - The document must be AUTHORITATIVE to the solution — the oracle is derived from it.
-      - It must NOT be solvable by grep, keyword search, field extraction, or top-k stats.
-      - Rules must INTERACT across distant sections, so a single extracted sentence gives the
-        wrong answer.
-      - The instruction says where the documents live without leaking which section matters.
-    Good shapes: a long policy/underwriting manual; an engineering standard consolidated from
-    four prior memos with a version history; a multi-source investigation corpus (emails,
-    chats, tickets, HR records) that must be reconciled.
-
-8.7 CROSS-TOOL / MULTI-LANGUAGE BOUNDARIES (targets Opus #20 "failures occur at the interaction
-    boundary between tools", GPT #20 "uncommon languages and frameworks")
-    Deliberately span the boundary: shell pipeline + a policy DSL + a compiled binary + a JSON
-    schema. The accepted task is Rego + Rust/Cargo + bash + jq. Failures cluster at the seams,
-    and the seams are exactly what a single-language benchmark never tests. Bias toward
-    languages/tools where the models are documented as weaker (Go, Rust, Rego, niche DSLs)
-    rather than mainstream Python/JS web work.
-
-8.8 FALSE-GREEN SELF-VERIFICATION BAIT (targets Opus #24 — the marquee weakness)
-    Give the environment a check that PASSES even when the work is wrong. A schema validator
-    that only checks shape. A build that compiles. A linter that's clean. A test suite in the
-    repo that covers only the happy path. The model runs it, sees green, declares victory,
-    and scores 0. Your instruction should acknowledge this trap in one sentence (as the
-    accepted task does: "A report that is schema-valid but contains wrong decisions is not
-    done") so the task remains FAIR while still catching the behavior.
-
-8.9 REWARD-HACK-PROOFING (targets Opus #12 "training-time reward gaming", GPT #24
-    "reward-hacking with weak verifiers")
-    Assume the model will try to satisfy the verifier without solving the task. Held-out cases
-    (6.3c) and re-execution of the artifact (6.3d) are your defense. Also consider: can the
-    agent delete or edit the tests? (No — they're mounted, not in the image.) Can it weaken a
-    schema? (No — the verifier has its own copy.) Can it find the answer in git history? (Pin
-    the checkout.) Can it decompile a binary to extract expected values? (Don't ship one.)
-
-8.10 WHAT NOT TO DO
-    - Do not make it hard with volume: 30 requirements, 12 output files, a 900-word prompt.
-      Explicitly rejected.
-    - Do not make it hard by being obscure or unfair: contradictory requirements, information
-      that isn't in the environment, success that depends on luck, unreliable infrastructure.
-    - Do not make it hard by hiding the goal. Well-specified and unhinted are compatible; you
-      must have both.
-    - Do not build a front-end/visualization task (Opus is weak there, but so is the review
-      pipeline — ui_building forces a different skeleton and more review surface).
-    - Do not clone an existing Terminal-Bench 2/3 or Terminus Ed.1 task. Uniqueness is checked
-      by similarity search.
-
-8.11 SANITY CHECK BEFORE YOU COMMIT TO THE IDEA
-    - Could a competent engineer solve this in 1-3 hours with the files provided? (If no, it's
-      unfair. Set expert_time_estimate_min honestly.)
-    - Does a model that does the obvious thing produce something that LOOKS right and IS wrong?
-      (If no, it will pass 80% and you have failed.)
-    - Is there at least one failure mode that only shows up on inputs the agent has never seen?
-      (If no, add heldout.py.)
-    - Is every single thing the tests check either stated or clearly implied in instruction.md?
-      (If no, you have a phantom-spec.)
+9.8 WHAT NOT TO DO
+  - Do not make it hard with volume: 30 requirements, 12 output files, a 900-word prompt.
+  - Do not make it hard by being obscure or unfair.
+  - Do not build a front-end/visualization task.
+  - Do not clone an existing task.
 
 
 ================================================================================
-SECTION 9. REFERENCE IMPLEMENTATION — WHAT "ACCEPTED" LOOKS LIKE
+SECTION 10. REFERENCE IMPLEMENTATION
 ================================================================================
 
-The accepted task `audit-wandb-promotion-policies` (category machine-learning, subcategories
-long_context + tool_specific, codebase_size small, languages rego/rust/bash, difficulty hard,
-agent timeout 1800, verifier timeout 600, environment/ ~531 KB). Its anatomy:
+What an accepted task looks like end to end:
 
-  ENVIRONMENT: a ~63k-word governance review (/app/docs/governance_review.md) with an explicit
-  "HISTORICAL — do not apply superseded values" version-history section; a partially broken
-  two-file OPA/Rego bundle (/app/policy); 28 request fixtures (/app/requests/REQ-*.json); a
-  strict JSON Schema (/app/schema); a Rust/Cargo schema validator (/app/verifier); and a bash
-  pipeline (/app/run_audit.sh) that runs OPA over every fixture, assembles a sorted report with
-  derived summary counts via jq, and validates it with the Cargo binary.
+  ENVIRONMENT: A long authoritative document (governance review, policy manual, spec); a
+  partially broken implementation; request fixtures; a strict JSON Schema; a validation
+  pipeline.
 
-  THE HARDNESS: the instruction names 2 symptoms; the bundle has 5 defects across 2 files.
-  Three of the five (a missing 30-day exception-window check, a missing member of the
-  protected-alias set, a capacity check that ignores accelerator_count) are never mentioned and
-  must be reconstructed from the long document — where the superseded 14-day window and 4-GPU
-  cap sit in the history section as bait. The Cargo validator passes on a structurally valid
-  report with entirely wrong decisions: the false-green trap.
+  THE HARDNESS: The instruction names a few symptoms. The implementation has more defects
+  than named, which must be reconstructed from the long document -- where superseded values
+  sit as bait. A validator passes on structurally valid but semantically wrong output.
 
-  THE VERIFIER: tests/oracle.py is a 222-line reference decision engine. tests/heldout.py
-  deterministically generates 250 fresh requests (seed 12345) that exist nowhere in the
-  container. test_outputs.py (a) checks the bundle still compiles under `opa check`,
-  (b) runs targeted rule-coverage tests where each expected value is computed by oracle.decide
-  rather than written as a literal, (c) evaluates the AGENT'S bundle with `opa eval` on all 28
-  shipped fixtures and all 250 held-out requests and diffs against the oracle, (d) validates
-  the produced report against the VERIFIER'S OWN copy of the schema, (e) checks the report's
-  decisions, ordering, sorted rule_ids and internally-consistent summary counts, (f) runs the
-  Cargo verifier, (g) re-runs the pipeline and asserts byte-identical output.
-
-  The shipped (buggy) bundle diverges from the oracle on ~25-30% of random requests. Fixing
-  only the 2 named symptoms still fails. That is the shape of a 0-20% task.
+  THE VERIFIER: oracle.py is a reference decision engine. heldout.py generates fresh requests
+  that exist nowhere in the container. test_outputs.py checks the bundle compiles, runs
+  targeted tests where expected values are computed by oracle.decide, evaluates on shipped
+  fixtures AND held-out requests, validates against the VERIFIER'S OWN copy of the schema,
+  checks decisions/ordering/consistency, re-runs the pipeline and asserts byte-identical
+  output.
 
 
 ================================================================================
-SECTION 10. THE REJECTION LIST — SELF-AUDIT BEFORE YOU DECLARE DONE
+SECTION 11. THE REJECTION LIST
 ================================================================================
 
 BLOCKING CI CHECKS (all must pass):
-  [ ] check_pinned_images            every FROM (and compose image:) has @sha256:<digest>
-  [ ] check_sanctioned_base_images   final runtime base is canonical, or justified in a comment
+  [ ] check_pinned_images            every FROM has @sha256:<digest>
+  [ ] check_sanctioned_base_images   final runtime base is canonical, or justified
   [ ] check_build_context_size       environment/ <= 100 MiB, no file > 50 MiB
-  [ ] pinned_dependencies            every pip/npm/cargo/gem package has an exact version pin
+  [ ] pinned_dependencies            every package has an exact version pin
   [ ] typos                          no spelling errors in code
   [ ] tests_or_solution_in_image     Dockerfile never COPYs solution/ or tests/
-  [ ] check_dockerfile_references    every file the Dockerfile references actually exists
+  [ ] check_dockerfile_references    every file the Dockerfile references exists
   [ ] check_test_sh                  test.sh uses pre-installed deps only and writes reward.txt
   [ ] check_task_absolute_path       absolute paths everywhere
-  [ ] ruff                           all Python lints clean (F841 unused vars WILL bite you)
+  [ ] ruff                           all Python lints clean
   [ ] validate_task_fields           task.toml complete, closed vocabularies respected
-  [ ] internet usage check           allow_internet = false AND the task is truly solvable offline
+  [ ] internet usage check           allow_internet = false AND solvable offline
 
 WARN-LEVEL CI CHECKS (fix them anyway; reviewers cite them):
   [ ] check_dockerignore, check_dockerfile_hygiene, check_offline_tests, check_apt_usage,
@@ -890,153 +771,124 @@ LLM-JUDGE CHECKS (must pass):
   [ ] behavior_in_tests              tests verify behavior
   [ ] informative_test_docstrings    every test has a real docstring
   [ ] anti_cheating_measures         task cannot be gamed
-  [ ] hardcoded_solution             solution not trivially derivable from the tests
-  [ ] file_reference_mentioned       output files specified in the instruction
+  [ ] hardcoded_solution             solution not trivially derivable from tests
+  [ ] file_reference_mentioned       output files specified in instruction
   [ ] structured_data_schema         data formats defined
 
-TEST-QUALITY EVAL FLAGS (reviewers act on these):
-  [ ] req-gap          instruction requires X, no test asserts X
-  [ ] weak-assertion   test too loose to catch a wrong solution
-  [ ] phantom-spec     tests enforce behavior the instruction never described
-  [ ] flaky-execution  a correct solution can fail due to timing/nondeterminism/infra
-  [ ] vacuous-test     test passes regardless of output (empty loop, always-true assert)
+THE DOCUMENTED SEND-BACKS (each is BLOCKING):
+  [ ] BLOCKING: A comment or blank line between `RC=$?` and the `if` in test.sh.
+  [ ] BLOCKING: A trailing `exit "$RC"` after the reward block in test.sh.
+  [ ] BLOCKING: Ruff F841 (unused exception variable) in any shipped Python file.
+  [ ] BLOCKING: Occupation Diversity Eval predicts a blocked occupation (RULE: OCCUPATION & SECTOR).
+  [ ] BLOCKING: codebase_size does not match actual file count (RULE: CODEBASE_SIZE).
+  [ ] BLOCKING: Multi-stage build missing when Dockerfile compiles artifacts (RULE: MULTI-STAGE).
+  [ ] BLOCKING: Dependencies not hash-locked (RULE: LOCKFILES).
+  [ ] BLOCKING: instruction.md gives hints or stepwise instructions (RULE: INSTRUCTION.MD).
+  [ ] BLOCKING: Python files fail ruff check (RULE: RUFF).
 
-THE DOCUMENTED SEND-BACKS (real rejection log — do not repeat these):
-  [ ] A comment or blank line between `RC=$?` and the `if` in test.sh.       BLOCKING
-  [ ] A trailing `exit "$RC"` after the reward block in test.sh.             BLOCKING
-  [ ] Ruff F841 (unused exception variable) in a helper script that got zipped. BLOCKING
-  [ ] Incomplete .dockerignore letting build artifacts into the context.     WARNING
-  [ ] Unpinned/unhashed Python deps (fix: hash-locked requirements +
-      `pip install --require-hashes --no-deps -r <lockfile>`).               WARNING
-  [ ] Dockerfile fetching Go deps at build in a way that trips the scanner.  WARNING
-  [ ] instruction.md written as implementation guidance instead of a task
-      definition (fix: rewrite to concise natural language, drop formatting
-      requirements and hints, keep only authoritative behavior + I/O).       WARNING
-
-REVIEWER SEND-BACKS (High severity — any one of these kills the task):
-  [ ] Instruction not concise / not well specified / not interesting / gives hints /
-      not unique / uses relative paths.
-  [ ] Dockerfile or build scripts pull CONTENT (not packages) from the web.
-  [ ] Environment contains the solution or ground-truth answers.
-  [ ] Dockerfile needs --privileged, SYS_ADMIN/NET_ADMIN/SYS_MODULE, or /var/run/docker.sock.
-  [ ] Compose remaps a reserved mount: /logs/artifacts/, /logs/verifier/, /tests/, /solution/.
-  [ ] AI-scaffolding filenames present (CLAUDE.md, skills.md, ...).
-  [ ] Oracle is flaky, needs the network, or is a hardcoded answer rather than an implementation.
-  [ ] Verifier can exit before writing reward.txt (RewardNotFoundError).
-  [ ] Verifier applies partial reward instead of binary 0/1.
-  [ ] Verifier branches differently for oracle vs agent.
-  [ ] Verifier tests something the instruction never asked for, or checks format without
-      checking correctness.
-  [ ] Solution copyable from test assertions; hardcoded values pass; answer guessable.
-
-RUBRIC (authored in the Snorkel submission UI, not in the zip — but it is a hard requirement):
-  [ ] Flat list of criterion lines for a non-milestone task (a single "# Rubric 1" header is
-      tolerated; never "# Rubric 2+" unless the task is milestone-based).
-  [ ] EVERY line starts with the word "Agent" and ends with ", ±N".
+RUBRIC (authored in the Snorkel submission UI):
+  [ ] Flat list of criterion lines for a non-milestone task.
+  [ ] EVERY line starts with the word "Agent" and ends with ", +/-N".
   [ ] Scores are only +/- 1, 2, 3, or 5. THE NUMBER 4 IS FORBIDDEN.
   [ ] At least THREE distinct criteria assign negative rewards.
   [ ] Max cumulative score (sum of positives) is 10-40 points for a non-milestone task.
-  [ ] Criteria grade the agent's TRACE (what it did), not the pytest result, not whether it
-      read instruction.md/task.toml, and never mention oracle or NOP runs.
-  [ ] Criteria are phrased as positive statements of fact with negative point values —
-      "Agent operates outside of /app, -5", not "Agent stays inside /app, +1".
-  [ ] ±5 for critical (safety, core correctness, secret leakage); ±3 for major (reliability,
-      verification, error recovery); ±1/±2 for minor (inspection, hygiene, tool flags).
 
 
 ================================================================================
-SECTION 11. A NOTE ON FALSE GREENS — READ THIS TWICE
+SECTION 12. FALSE GREENS
 ================================================================================
 
-Weakness #24 in the catalogue is about YOU. Verbatim from the source:
+Weakness #24 in the Claude catalogue is about YOU. Verbatim:
 
   "In Claude Code sessions, declared work 'verified' and 'done' without running the canonical
    build command (e.g., `make -j4`). Example: reported all checks as 'verified green' and
-   described the solution as 'architecturally clean' — but running `make -j4` manually surfaced
-   12 failing tests and a build break. The targeted test runs it did perform resolved paths
-   incorrectly (bundle-relative instead of repo-relative), so they never exercised the edited
-   code. This is the failure mode Opus 4.8 was specifically marketed to have reduced (~4x less
-   likely to let code flaws pass unremarked). In practice, not reduced."
+   described the solution as 'architecturally clean' -- but running `make -j4` manually
+   surfaced 12 failing tests and a build break."
 
 You are the model that does this. So:
 
   - NEVER report the task as complete without actually building the image and actually running
     the tests. Not "the tests should pass". Not "verified green". Run them.
   - Check that the paths you tested against are the paths the harness uses: tests at /tests,
-    solution at /solution, reward at /logs/verifier/reward.txt, app at /app. Testing against
-    a host-relative path proves nothing.
+    solution at /solution, reward at /logs/verifier/reward.txt, app at /app.
   - Run BOTH invariants, in the container, before you claim done:
         oracle run:   build image -> bash /solution/solve.sh -> bash /tests/test.sh
                       -> cat /logs/verifier/reward.txt   MUST BE 1
         null run:     build image -> (do nothing at all)  -> bash /tests/test.sh
                       -> cat /logs/verifier/reward.txt   MUST BE 0
-    A null run that scores 1 means your tests are vacuous. An oracle run that scores 0 means
-    your task is broken. Both are immediate rejections.
-  - Read the actual pytest output. Do not infer success from the absence of a traceback in
-    your own head. `-rA` is in the canonical test.sh precisely so you can see every result.
-  - If a test fails, FIX THE CAUSE. Do not weaken the assertion to make it pass — a weakened
-    assertion is a `weak-assertion` / `vacuous-test` flag and a rejection.
-  - Your build WILL be independently verified in Docker after you hand it off. Oracle must
-    score 1, null run must score 0. If you claimed done and it doesn't, it comes straight back
-    to you and the cycle is wasted. There is no credit for confident prose.
+  - Read the actual pytest output. Do not infer success from the absence of a traceback.
+  - If a test fails, FIX THE CAUSE. Do not weaken the assertion to make it pass.
+  - Your build WILL be independently verified in Docker after you hand it off.
 
 Report honestly. If something is unfinished or you could not verify it, say so explicitly.
 
 
 ================================================================================
-SECTION 12. WHERE THE DOCS CONTRADICT EACH OTHER (ADJUDICATED — NEWER WINS)
+SECTION 13. DOC CONTRADICTIONS
 ================================================================================
 
-  1. TEST DEPENDENCIES IN THE IMAGE. The older onboarding material says test/verifier
-     dependencies must NOT be baked into the image. Task Requirements.txt + the new
-     allow_internet = false blocking check say ALL verifier deps MUST be baked in, because
-     there is no network at test time.
-     RESOLUTION: Task Requirements wins. BAKE THE DEPS IN (pytest, pytest-json-ctrf, jsonschema,
-     whatever your tests import). The old rule was about not COPYing the tests/ and solution/
-     DIRECTORIES into the image — that rule still stands. Install the packages; never copy the
-     test code.
+The source docs contradict each other in places. This section lists each contradiction found,
+states which source said what, and gives the single ruling the build session must follow.
 
-  2. VERIFIER MAY DOWNLOAD DEPS. Review Checklist says "Verifiers can download dependencies
-     that are needed only for verification, but they must use pinned versions."
-     RESOLUTION: OBSOLETE. allow_internet = false means test.sh has no network at all. Zero
-     downloads in test.sh. check_offline_tests + check_test_sh enforce this.
+1. TEST DEPENDENCIES IN THE IMAGE
+   Older onboarding material: test/verifier deps must NOT be baked into the image.
+   Task Requirements.txt + allow_internet = false blocking check: ALL verifier deps MUST be
+   baked in, because there is no network at test time.
+   RULING: Task Requirements wins. BAKE THE DEPS IN. The old rule was about not COPYing the
+   tests/ and solution/ DIRECTORIES into the image -- that still stands. Install packages;
+   never copy test code.
 
-  3. DIGEST PINNING SEVERITY. Review Checklist rates "Base Images versions are pinned" and
-     "Apt package versions are pinned" as LOW severity / nice-to-have. Task Requirements and
-     the Dockerfile best-practices doc make check_pinned_images and pinned_dependencies
-     BLOCKING CI checks.
-     RESOLUTION: BLOCKING wins. Digest-pin every FROM. Exact-pin every language package. (Apt
-     package version pinning genuinely remains optional for common packages.)
+2. VERIFIER MAY DOWNLOAD DEPS
+   Review Checklist: "Verifiers can download dependencies that are needed only for
+   verification, but they must use pinned versions."
+   RULING: OBSOLETE. allow_internet = false means test.sh has no network at all. Zero
+   downloads in test.sh.
 
-  4. DIFFICULTY BANDS. New Task Start Guide says "pass rate should be 0~20%, thus HARD".
-     Task Requirements gives the full table.
-     RESOLUTION: Use Task Requirements.txt — Hard <=20% (best OR worst model), Medium 20-60%
-     (worst), Easy 60-80% (worst), >80% (worst) rejected. They agree; the table is the
-     authority.
+3. DIGEST PINNING SEVERITY
+   Review Checklist: rates "Base Images versions are pinned" as LOW severity / nice-to-have.
+   Task Requirements + Dockerfile best-practices: check_pinned_images is BLOCKING.
+   RULING: BLOCKING wins. Digest-pin every FROM. Exact-pin every language package.
 
-  5. GO BASE-IMAGE DIGEST. snorkel_canonical_image_best_practices.md gives
-     ...c1ae53890540c06173ea77ac; Dockerfile & Image Best Practices.txt gives
-     ...c1ae53890540c06173ea77ac (two characters differ).
-     RESOLUTION: the canonical-image doc is the designated sanctioned list; its string is
-     reproduced in Section 4.1. Verify before relying on it if you build a Go task.
+4. DIFFICULTY BANDS
+   New Task Start Guide: "pass rate should be 0~20%, thus HARD".
+   Task Requirements: gives the full table.
+   RULING: Use Task Requirements.txt -- they agree; the table is the authority.
 
-  6. TIMEOUTS. The skeleton template shows [agent] timeout_sec = 900 / [verifier] 450; the
-     best-practices doc shows 900/420; the accepted task uses 1800/600; the milestone guide
-     shows 1200 per step.
-     RESOLUTION: no single mandated value — but [agent] timeout_sec has a HARD RANGE of 1 to
-     1800 seconds and 1800 is the absolute ceiling. Pick realistic values; the oracle must
-     comfortably finish inside them. (The source note says "should not be over 1800 ms" — that
-     is a typo for seconds.)
+5. GO BASE-IMAGE DIGEST
+   snorkel_canonical_image_best_practices.md and Dockerfile & Image Best Practices.txt give
+   slightly different Go digests (two characters differ).
+   RULING: The canonical-image doc is the designated sanctioned list. Verify the digest
+   resolves before relying on it if you build a Go task.
 
-  7. CANARY STRINGS. The prompt-styling guide's principle 6 is titled "must use absolute paths"
-     but its body text talks about canary strings (a copy-paste error in the source).
-     RESOLUTION: both rules are real and both apply — absolute paths everywhere, and NO canary
-     string anywhere in instruction.md.
+6. TIMEOUTS
+   The skeleton template shows [agent] timeout_sec = 900 / [verifier] 450; the best-practices
+   doc shows 900/420; accepted tasks use 1800/600; milestone guide shows 1200 per step.
+   RULING: No single mandated value. [agent] timeout_sec has a HARD RANGE of 1 to 1800
+   seconds. Pick realistic values; the oracle must comfortably finish inside them.
 
-  8. HEREDOCS. The Dockerfile guidance bans heredocs (check_heredoc_usage). The accepted
-     solve.sh uses heredocs freely.
-     RESOLUTION: the ban applies to the DOCKERFILE only. Heredocs in solution/solve.sh are
-     fine and idiomatic.
+7. CANARY STRINGS
+   The prompt-styling guide's principle 6 is titled "must use absolute paths" but its body
+   talks about canary strings (copy-paste error in source).
+   RULING: Both rules are real and both apply -- absolute paths everywhere, and NO canary
+   string anywhere in instruction.md.
+
+8. HEREDOCS
+   The Dockerfile guidance bans heredocs (check_heredoc_usage).
+   Accepted solve.sh uses heredocs freely.
+   RULING: The ban applies to the DOCKERFILE only. Heredocs in solution/solve.sh are fine.
+
+9. CATEGORY ENUM vs CLASSIFIER
+   task.toml has a category field from a closed vocabulary.
+   A separate LLM classifier reads instruction.md and shipped source and predicts category.
+   RULING: The classifier reading content wins over the field value. Setting a legal value in
+   task.toml does NOT make the task legal if the content classifies into a blocked category.
+
+10. CODEBASE_SIZE LABEL
+    Some docs describe it as approximate ("rough scale").
+    Task Requirements.txt clarifies: "This is a categorical label (not a literal file count);
+    count environment files the agent works with, not outputs the agent produces."
+    RULING: Count the files shipped under environment/ after .dockerignore, then declare the
+    band. The validate_task_fields CI check enforces this.
 
 
 ================================================================================
@@ -1048,6 +900,7 @@ sanctioned base. All verifier deps baked in. tests/ and solution/ never in the i
 test.sh reward block, byte for byte. instruction.md that sounds like a tired human, gives the
 what, hides the how, uses absolute paths, and fits in three paragraphs. An oracle that derives.
 Tests that re-derive, that re-execute the agent's artifact, and that judge it on cases it has
-never seen. And a problem whose obvious solution looks right and is wrong.
+never seen. A domain that does not classify as Software Developer or Data Scientist. And a
+problem whose obvious solution looks right and is wrong.
 
 Then build the image and RUN the tests. Oracle -> 1. Null -> 0. Only then say you are done.

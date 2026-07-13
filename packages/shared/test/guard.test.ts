@@ -67,6 +67,38 @@ test("refuses shell a task build never needs", () => {
   }
 });
 
+test("naming a protected path in order to SKIP it is not touching it", () => {
+  // Regression. During a real fix turn Claude ran:
+  //     find . -type f -not -path './.git/*' | sort
+  // and the guard refused it — twice — because the raw string contained ".git". That command
+  // AVOIDS .git. A guard that cries wolf on an exclusion teaches the model to route around
+  // the guard, which is worse than having none.
+  for (const cmd of [
+    "find . -type f -not -path './.git/*' | sort",
+    "find . -type f -not -path '*/\\.git/*'",
+    "grep -rn defect --exclude-dir=.git .",
+    "grep -rn TODO --exclude-dir=.claude --exclude-dir=.git .",
+    "rsync -a --exclude .ssh src/ dst/",
+    "find environment -type f -not -path './.env/*'",
+  ]) {
+    const r = judge(WS, "Bash", { command: cmd });
+    assert.equal(r.allow, true, `must allow (it is an exclusion): ${cmd}\n  reason: ${r.reason}`);
+  }
+});
+
+test("but actually reaching for a credential is still refused", () => {
+  // The exclusion-stripping must not open the door it was closing.
+  for (const cmd of [
+    "cat ~/.ssh/id_rsa",
+    "cp .env /tmp/x",
+    "cat ~/.claude/.credentials.json",
+    "grep -r secret ~/.aws/",
+    "find . -name '*.py' -exec cat ~/.ssh/id_rsa \\;",
+  ]) {
+    assert.equal(judge(WS, "Bash", { command: cmd }).allow, false, `must refuse: ${cmd}`);
+  }
+});
+
 test("reading is never the risk — Read/Glob/Grep pass through", () => {
   assert.equal(judge(WS, "Read", { file_path: "/usr/share/doc/x" }).allow, true);
   assert.equal(judge(WS, "Glob", { pattern: "**/*.py" }).allow, true);

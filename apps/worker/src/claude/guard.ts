@@ -48,16 +48,23 @@ const SHELL_DENY: Array<{ re: RegExp; why: string }> = [
 ];
 
 /**
- * Paths that must never be written or read-modified, even by a command that otherwise looks
- * fine. These are the ones where a mistake is silent and expensive: credentials, the repo's
- * own source, and the .env that holds the Supabase secret.
- */
-/**
- * These are matched against BOTH file paths and raw shell commands, so the boundaries have
- * to work in either. `(^|[^\w])` means "start, or a non-word char" — which catches
- * `/home/pug/.env` and `cp .env /tmp` alike, while `\b` on the tail keeps `.envrc` and
- * `.gitignore` (harmless, and `.gitignore` is a file Claude legitimately writes) from
- * matching.
+ * Paths where a mistake is silent and expensive: credentials, and the .env holding the
+ * Supabase secret.
+ *
+ * `(^|[^\w])` means "start, or a non-word char" — which catches `/home/pug/.env` and
+ * `cp .env /tmp` alike, while `\b` on the tail keeps `.envrc` and `.gitignore` (harmless, and
+ * `.gitignore` is a file Claude legitimately writes) from matching.
+ *
+ * NOTE `.git` is deliberately NOT here for shell commands. It was, and it fired on this,
+ * during a real fix turn:
+ *
+ *     find . -type f -not -path './.git/*' | sort
+ *
+ * That command AVOIDS .git — the exact opposite of touching it — and the guard refused it
+ * twice before Claude routed around it. A guard that cries wolf on `--exclude-dir=.git`
+ * teaches the model to work around the guard, which is worse than not having one. And it was
+ * never load-bearing: the task workspace has no .git of its own, file-writing tools are
+ * already confined to the workspace, and `rm -rf .git` is caught by the recursive-delete rule.
  */
 const PROTECTED = [
   /(^|[^\w])\.claude\b/,
@@ -65,8 +72,22 @@ const PROTECTED = [
   /(^|[^\w])\.aws\b/,
   /(^|[^\w])\.gnupg\b/,
   /(^|[^\w])\.env\b/,
-  /(^|[^\w])\.git\b/,
 ];
+
+/**
+ * Strip the parts of a command that EXCLUDE a path, before asking whether it touches one.
+ *
+ * `grep --exclude-dir=.claude`, `find -not -path './.env/*'`, `rsync --exclude .ssh` — every
+ * one of these names a protected path precisely in order to stay away from it. Matching the
+ * raw string cannot tell "read this" from "skip this", and the difference is the whole point.
+ */
+function stripExclusions(cmd: string): string {
+  return cmd
+    .replace(/--exclude(-dir)?[= ]\s*(['"]?)[^\s'"]+\2/g, " ")
+    .replace(/-not\s+-path\s+(['"]?)[^\s'"]+\1/g, " ")
+    .replace(/-path\s+(['"]?)[^\s'"]+\1\s+-prune/g, " ")
+    .replace(/:!\S+/g, " "); // git pathspec exclusion
+}
 
 function insideWorkspace(workspace: string, p: string): boolean {
   const abs = isAbsolute(p) ? p : resolve(workspace, p);
@@ -109,7 +130,9 @@ export function judge(workspace: string, toolName: string, input: Record<string,
 
   // --- Bash: allow it, but not the handful of things a task build never needs. ---
   if (toolName === "Bash") {
-    const cmd = String(input.command ?? "");
+    const raw = String(input.command ?? "");
+    // A path named in order to be SKIPPED is not a path being touched. See stripExclusions().
+    const cmd = stripExclusions(raw);
     for (const { re, why } of SHELL_DENY) {
       if (re.test(cmd)) {
         return {

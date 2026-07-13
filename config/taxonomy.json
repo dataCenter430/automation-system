@@ -6,11 +6,8 @@
     "$allowed": [
       "system-administration",
       "build-and-dependency-management",
-      "data-processing",
       "games",
-      "software-engineering",
       "machine-learning",
-      "debugging",
       "security",
       "scientific-computing"
     ],
@@ -19,20 +16,30 @@
       "categories": ["software-engineering", "debugging", "data-processing"]
     },
 
-    "interactive challenges & games": "games",
-    "interactive challenges and games": "games",
+    "$labels": "Snorkel's platform shows DISPLAY labels ('Security & Cryptography'); task.toml wants ENUMS ('security'). These map one to the other. Keys are matched through normaliseLabel(), which folds case, '&'/'and', and punctuation — so ONE key covers every spelling and there is no longer a duplicate entry per ampersand.",
+
     "games": "games",
+    "interactive challenges and games": "games",
+
     "system administration": "system-administration",
+
     "build and dependency management": "build-and-dependency-management",
+    "build and dependency": "build-and-dependency-management",
+
+    "machine learning": "machine-learning",
+    "machine learning and ai": "machine-learning",
+    "ml and ai": "machine-learning",
+
+    "security": "security",
+    "security and cryptography": "security",
+    "cryptography": "security",
+
+    "scientific computing": "scientific-computing",
+
+    "$blockedLabels": "The three below resolve to BLOCKED categories. They are mapped ON PURPOSE, not omitted: a label that resolves to a blocked category must be REJECTED WITH THAT REASON at paste time ('this is data-processing, which Snorkel is not accepting'), not with a confusing 'unknown category'. Deleting them would turn a precise refusal into a vague one.",
     "data processing": "data-processing",
     "software engineering": "software-engineering",
-    "machine learning": "machine-learning",
-    "machine learning & ai": "machine-learning",
-    "machine learning and ai": "machine-learning",
-    "ml & ai": "machine-learning",
-    "debugging": "debugging",
-    "security": "security",
-    "scientific computing": "scientific-computing"
+    "debugging": "debugging"
   },
 
   "subcategory": {
@@ -44,6 +51,7 @@
     "api integration": "api_integration",
     "db interaction": "db_interaction",
     "database interaction": "db_interaction",
+    "db": "db_interaction",
     "ui building": "ui_building"
   },
 

@@ -24,9 +24,51 @@ function load(): TaxonomyFile {
   return cached;
 }
 
+/**
+ * Fold a human label down to one canonical shape, so the table needs ONE key per concept instead
+ * of one key per spelling.
+ *
+ * Snorkel's platform writes categories as display labels — "Security & Cryptography",
+ * "Machine Learning & AI" — and the blob is pasted straight out of it. The old lookup only
+ * lowercased, so every ampersand needed its own duplicate key ("machine learning & ai" AND
+ * "machine learning and ai"), and the first label nobody had thought of threw. That is exactly how
+ * "Security & Cryptography" failed: there was no key for it, and somebody "fixed" it by pasting the
+ * LABEL into $allowed — which is the list of task.toml ENUM values — so the error message ended up
+ * saying the value was unknown while listing it as allowed.
+ *
+ * Normalising kills the whole class:
+ *
+ *   "Security & Cryptography"   ->  "security and cryptography"
+ *   "security and cryptography" ->  "security and cryptography"
+ *   "Security  &  Cryptography" ->  "security and cryptography"
+ *   "Security/Cryptography"     ->  "security cryptography"   (still distinct — see below)
+ *
+ * Deliberately NOT collapsed: word order, and the words themselves. This normalises SPELLING, not
+ * MEANING. A label we do not recognise must still throw, because guessing a category wrong is a
+ * blocked-category rejection at Snorkel's CI, forty-five minutes after the guess.
+ */
+export function normaliseLabel(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9+#.]+/g, " ") // keep c++, c#, .net — strip the rest to spaces
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
 function lookup(table: Record<string, string | string[]>, label: string): string | null {
-  const hit = table[label.trim().toLowerCase()];
-  return typeof hit === "string" ? hit : null;
+  const want = normaliseLabel(label);
+  for (const [key, value] of Object.entries(table)) {
+    if (key.startsWith("$")) continue; // $comment / $allowed / $blocked are metadata, not entries
+    if (typeof value !== "string") continue;
+    if (normaliseLabel(key) === want) return value;
+  }
+  return null;
+}
+
+/** Every label the table recognises — for an error message that is actually actionable. */
+function knownLabels(table: Record<string, string | string[]>): string[] {
+  return Object.keys(table).filter((k) => !k.startsWith("$") && typeof table[k] === "string");
 }
 
 export interface TaskToml {
@@ -68,9 +110,17 @@ export function toTaskToml(parsed: {
 
   const category = lookup(t.category, parsed.category);
   if (!category) {
+    // The old message listed $allowed — the task.toml ENUM values — at somebody who had just
+    // pasted a LABEL. So it answered a question nobody asked ("which enums are legal?") instead of
+    // the one they had ("what do I write, and where?"), and the obvious "fix" was to paste the
+    // label into $allowed, which made the error contradict itself: unknown, and listed as allowed.
     throw new TaxonomyError(
-      `Unknown category ${JSON.stringify(parsed.category)}. ` +
-        `Add it to config/taxonomy.json (allowed values: ${(t.category.$allowed as string[]).join(", ")}).`,
+      `Unknown category ${JSON.stringify(parsed.category)}.\n\n` +
+        `It is not a task.toml value — it is the label Snorkel's platform shows — so it has to be ` +
+        `MAPPED to one. Add a line to the "category" table in config/taxonomy.json:\n\n` +
+        `    "${normaliseLabel(parsed.category)}": "<one of: ${(t.category.$allowed as string[]).join(" | ")}>"\n\n` +
+        `Labels currently recognised:\n` +
+        knownLabels(t.category).map((l) => `  - ${l}  ->  ${t.category[l] as string}`).join("\n"),
     );
   }
 
@@ -91,8 +141,11 @@ export function toTaskToml(parsed: {
     const sub = lookup(t.subcategory, raw);
     if (!sub) {
       throw new TaxonomyError(
-        `Unknown sub-category ${JSON.stringify(raw)}. ` +
-          `Add it to config/taxonomy.json (allowed values: ${(t.subcategory.$allowed as string[]).join(", ")}).`,
+        `Unknown sub-category ${JSON.stringify(raw)}.\n\n` +
+          `Add a line to the "subcategory" table in config/taxonomy.json:\n\n` +
+          `    "${normaliseLabel(raw)}": "<one of: ${(t.subcategory.$allowed as string[]).join(" | ")}>"\n\n` +
+          `Labels currently recognised:\n` +
+          knownLabels(t.subcategory).map((l) => `  - ${l}  ->  ${t.subcategory[l] as string}`).join("\n"),
       );
     }
     if (!subcategories.includes(sub)) subcategories.push(sub);

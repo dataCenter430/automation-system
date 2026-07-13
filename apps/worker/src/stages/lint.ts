@@ -560,6 +560,42 @@ export function lintTask(taskDir: string): LintResult {
         `Build context is ${(total / 1048576).toFixed(1)} MiB; limit is 100 MiB.`);
   }
 
+  // ---- tool caches must not ship with the task -----------------------------
+  //
+  // We hardened the gate to run ruff. Claude, correctly, started running `ruff check` inside
+  // the task directory to check its own work — and ruff wrote a `.ruff_cache/`, which the zip
+  // then swept into the submission: fifteen cache files, sent to Snorkel as part of the task.
+  //
+  // zip.ts now excludes every dot-directory categorically, so the artefact is clean. This rule
+  // is about the tree itself, and it is BLOCKING for one scope only: a cache directory under
+  // environment/ is a live hazard, not untidiness — environment/ is the Docker build context,
+  // so it gets baked into the image the agent under test runs in, and a stale ruff or pytest
+  // cache in there can change what the task's own tooling does.
+  //
+  // Anywhere else in the tree it is a warning: the zip drops it, so it never reaches Snorkel.
+  const CACHE_DIR = /^(\.ruff_cache|\.pytest_cache|\.mypy_cache|__pycache__|\.tox|\.cache|node_modules|\.venv)$/;
+  const cacheDirs = (dir: string, out: string[] = []): string[] => {
+    if (!existsSync(dir)) return out;
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue;
+      if (CACHE_DIR.test(e.name)) out.push(join(dir, e.name));
+      else cacheDirs(join(dir, e.name), out);
+    }
+    return out;
+  };
+  for (const d of cacheDirs(taskDir)) {
+    const rel = relative(taskDir, d).split(sep).join("/");
+    const inBuildContext = rel.startsWith("environment/");
+    add(
+      "no_tool_caches", inBuildContext ? "blocking" : "warning", rel + "/",
+      inBuildContext
+        ? `${rel}/ is a tool cache inside the Docker build context. It would be baked into the ` +
+          `image the agent runs in. Delete it, and run linters with --no-cache.`
+        : `${rel}/ is a tool cache. The zip drops it, so it will not reach Snorkel — but it ` +
+          `should not be in the task tree. Run linters with --no-cache.`,
+    );
+  }
+
   // ---- AI scaffolding must not ship with the task --------------------------
   for (const p of walk(taskDir)) {
     const base = p.split(sep).pop()!;

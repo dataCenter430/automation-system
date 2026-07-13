@@ -41,6 +41,9 @@ const EXCLUDE_DIRS = new Set(["node_modules", "__pycache__"]);
 function isJunkDir(name: string): boolean {
   return name.startsWith(".") || EXCLUDE_DIRS.has(name);
 }
+
+/** The entire shape of a Terminus task. Nothing else may sit at the root. */
+const ROOT_ALLOWED = new Set(["task.toml", "instruction.md", "environment", "solution", "tests"]);
 // `*.tmp.<pid>.<ts>` are Claude Code's own atomic-write temp files. They are normally
 // cleaned up, but a crash mid-write leaves them behind — and they must never ship inside
 // a submitted task. Same for CLAUDE.md, which is our build scaffolding, not the task's.
@@ -62,18 +65,24 @@ export async function zipTask(taskDir: string, outZipPath: string): Promise<ZipR
   mkdirSync(dirname(outZipPath), { recursive: true });
 
   const files: string[] = [];
-  const walk = (dir: string) => {
+  const walk = (dir: string, atRoot: boolean) => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       if (e.isDirectory()) {
         if (isJunkDir(e.name)) continue;
-        walk(join(dir, e.name));
+        // A task tree is exactly task.toml, instruction.md, environment/, solution/, tests/.
+        // Anything else at the root is build scratch. lint.ts blocks on it so the fixer
+        // removes it; this is the belt to that pair of braces, because the gate verifies the
+        // WORKSPACE and we ship the ZIP — and until now nothing kept those two in step.
+        if (atRoot && !ROOT_ALLOWED.has(e.name)) continue;
+        walk(join(dir, e.name), false);
         continue;
       }
       if (EXCLUDE_FILES.test(e.name)) continue;
+      if (atRoot && !ROOT_ALLOWED.has(e.name)) continue;
       files.push(join(dir, e.name));
     }
   };
-  walk(taskDir);
+  walk(taskDir, true);
 
   if (files.length === 0) throw new Error(`Task dir is empty: ${taskDir}`);
 

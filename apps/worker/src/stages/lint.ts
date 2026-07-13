@@ -560,6 +560,35 @@ export function lintTask(taskDir: string): LintResult {
         `Build context is ${(total / 1048576).toFixed(1)} MiB; limit is 100 MiB.`);
   }
 
+  // ---- the task tree has a known shape; anything else is detritus ----------
+  //
+  // A Terminus task is exactly: task.toml, instruction.md, environment/, solution/, tests/.
+  // Nothing else belongs at the root.
+  //
+  // This exists because of an asymmetry that had gone unnoticed: THE GATE VERIFIES THE
+  // WORKSPACE, BUT WE SHIP THE ZIP. Nothing asserted those were the same thing. So when Claude
+  // — checking its own work, exactly as we asked it to — ran ruff (leaving a .ruff_cache/) and
+  // zipped the tree to inspect it (leaving a 93 KB copy of the submission INSIDE the
+  // submission), the gate still said VERIFIED. It was telling the truth about a tree that was
+  // not quite the one going to Snorkel.
+  //
+  // zip.ts drops this junk categorically now, so it cannot reach Snorkel either way. But the
+  // tree itself should be clean, and BLOCKING is right: the fixer deletes the file, and the
+  // thing we verify becomes the thing we ship.
+  const ROOT_ALLOWED = new Set(["task.toml", "instruction.md", "environment", "solution", "tests"]);
+  for (const e of readdirSync(taskDir, { withFileTypes: true })) {
+    // Dot-entries are ours or the tools'; zip.ts excludes every dot-directory, and .pipeline
+    // is this pipeline's own bookkeeping. They are handled by no_tool_caches below.
+    if (e.name.startsWith(".")) continue;
+    if (ROOT_ALLOWED.has(e.name)) continue;
+    add(
+      "unexpected_root_entry", "blocking", e.name + (e.isDirectory() ? "/" : ""),
+      `${e.name} is not part of a task. The tree is exactly task.toml, instruction.md, ` +
+        `environment/, solution/ and tests/. Delete it — build scratch (an archive you made to ` +
+        `inspect the submission, a notes file, a scratch script) must not ship inside the task.`,
+    );
+  }
+
   // ---- tool caches must not ship with the task -----------------------------
   //
   // We hardened the gate to run ruff. Claude, correctly, started running `ruff check` inside

@@ -9,7 +9,7 @@
  * loop, which is what lets a task parked in CHECKING_FEEDBACK yield the worker to another
  * task instead of blocking it for 20 minutes.
  */
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   PipelineState as S, stateName, TaskStatus,
@@ -20,17 +20,19 @@ import {
 import type { TerminusRow } from "../../../packages/shared/src/types.ts";
 import type { ParsedTask } from "../../../packages/shared/src/parse-task-blob.ts";
 import { readState, writeState, patchState, type LocalState } from "./state.ts";
+import { snap } from "./browser/actions.ts";
 import { buildTask, fixTask, buildAlreadyComplete, BuildIncomplete } from "./stages/build.ts";
 import { verifyTask } from "./stages/verify.ts";
 import { zipTask, assertNoWrapperDir } from "./stages/zip.ts";
 import { generateExplanations } from "./stages/explain-generate.ts";
 import { openNewSubmission, fillSubmissionForm, AttestationRefused, FormNotReady } from "./stages/upload.ts";
+import { findInReviseQueue, readReviseInput, writeRubric } from "./stages/revise.ts";
 import { checkFeedback, FeedbackInconclusive } from "./stages/feedback.ts";
 import { findSubmitted, clickSubmit, finaliseForm, pickAht } from "./stages/submit.ts";
 import { readQueue, QUEUE_LIMIT } from "./stages/queue-gate.ts";
 import { canonicalBaseImage } from "./stages/canonical-image.ts";
 import { attach, detach, snorkelPage, BrowserUnavailable, type Attached } from "./browser/cdp.ts";
-import { SelectorNotFound, UnconfirmedSelector } from "./browser/selectors.ts";
+import { SelectorNotFound, UnconfirmedSelector, assertConfirmed, resolve_ } from "./browser/selectors.ts";
 import { RateLimited } from "./claude/errors.ts";
 import { Semaphore } from "./util/semaphore.ts";
 import type { Config } from "./config.ts";
@@ -171,6 +173,7 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
       explanations: null,
       submissionUrl: null,
       feedbackStartedAt: null,
+      pass: 1,
       lastError: row.last_error,
       updatedAt: new Date().toISOString(),
     });
@@ -429,16 +432,45 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
         // the try that would escape advance() entirely instead of parking the task.
         a = await attach();
 
-        // Always start from a clean page. Clearing a previously-attached file is fiddly
-        // and varies by dropzone; reloading and re-attaching is idempotent and sidesteps
-        // the whole "which zip is actually attached" class of bug.
-        const page = await openNewSubmission(a, runDir);
+        // WHICH PASS ARE WE ON — this decides whether we create a submission or edit one.
+        //
+        // Pass 1 opens a NEW submission from the home page. Pass 2 must NOT: the task already
+        // has a submission, it is sitting on its revise page, and opening a new one would create
+        // a SECOND submission of the same task and leave the first stranded in the revise queue
+        // forever. So pass 2 returns to the revise URL and edits the form that is already there.
+        const page =
+          s.pass === 2 && s.submissionUrl
+            ? await snorkelPage(a, s.submissionUrl)
+            : await openNewSubmission(a, runDir);
+
         const r = await fillSubmissionForm({
           page, runDir, taskDir: ws,
           zipPath: s.zipPath!,
           explanations: s.explanations!,
         });
-        if (r.submissionUid) await patchTask(row.task_id, { submission_id: r.submissionUid });
+
+        // Pass 2 already HAS its uid, captured on pass 1. Do not overwrite it — it is the only
+        // key that finds this task in the revise queue.
+        if (s.pass !== 2 && r.submissionUid) {
+          await patchTask(row.task_id, { submission_id: r.submissionUid });
+        }
+
+        // Pass 2 also carries the rubric Claude rewrote, which lives in the workspace rather
+        // than the zip: it goes into a textbox on the page, not into the task tree. The
+        // reviewer's complaint in the live DOM was almost entirely ABOUT this field, so a
+        // revision that re-uploads a fixed tree and leaves the AI's original rubric in place
+        // would be sent straight back.
+        if (s.pass === 2) {
+          const rubricPath = join(ws, ".pipeline", "rubric.md");
+          if (!existsSync(rubricPath)) {
+            throw new FormNotReady(
+              `The revise turn did not write ${rubricPath}. The rubric is what the reviewer ` +
+                `grades against and is the thing they most often send tasks back for — ` +
+                `re-submitting with the AI's untouched rubric would waste the round trip.`,
+            );
+          }
+          await writeRubric(page, readFileSync(rubricPath, "utf8"), runDir);
+        }
 
         // Remember WHERE the filled form is. The feedback and submit stages have to come
         // back to this exact page; asking for the home page navigated the form away.
@@ -501,19 +533,27 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
         });
 
         if (r.verdict === "pass") {
-          // The green-run-only fields — rubric, "Send to reviewer?", the two attestation radios,
-          // the Task Inspiration id, the time budget — are NOT set here any more. They are set by
-          // finaliseForm() in SUBMITTING, immediately before the click.
+          // The green-run-only fields — rubric box, "Send to reviewer?", the two attestation
+          // radios, the Task Inspiration id, the time budget — are NOT set here. finaliseForm()
+          // sets them immediately before the click, in SUBMITTING or SENDING_TO_REVIEWER.
           //
-          // The reason is the gap. A task parks at AWAITING_APPROVAL until a human presses the
-          // button, which may be hours; SUBMITTING then re-navigates to the submission URL. State
-          // set here has to survive that gap and that reload, on a form that autosaves whenever it
-          // feels like it. Setting every one of those fields on the page we are actually about to
-          // submit, seconds before we submit it, removes the question entirely.
-          await transition(ctx, row, ws, S.AWAITING_APPROVAL, {
+          // The reason is the gap. A task parks at an approval state until a human presses the
+          // button, which may be hours; the submit state then re-navigates to the submission URL.
+          // State set here would have to survive that gap and that reload, on a form that
+          // autosaves whenever it feels like it. Setting those fields on the page we are actually
+          // about to submit, seconds before we submit it, removes the question entirely.
+          //
+          // WHICH APPROVAL, though. Pass 1 goes to a CI submission; pass 2 goes to a human
+          // reviewer. They are different clicks with different consequences, so they are
+          // different gates — and the second one is the one that puts a person's time on the line.
+          const gate = s.pass === 2 ? S.AWAITING_REVIEW_APPROVAL : S.AWAITING_APPROVAL;
+          await transition(ctx, row, ws, gate, {
             stage: "feedback",
-            message: `✅ Snorkel checks passed in ${r.elapsedSec}s · waiting for your approval`,
-            detail: { elapsed_sec: r.elapsedSec },
+            message:
+              s.pass === 2
+                ? `✅ Snorkel checks passed in ${r.elapsedSec}s · revision ready · approve to SEND TO A REVIEWER`
+                : `✅ Snorkel checks passed in ${r.elapsedSec}s · waiting for your approval`,
+            detail: { elapsed_sec: r.elapsedSec, pass: s.pass },
           });
         } else {
           patchState(ws, { lastError: r.output });
@@ -714,7 +754,176 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
       return true;
     }
 
-    case S.SUBMITTED:
+    // ----------------------------------------------------------- PASS 2: THE REVISE LAP
+    //
+    // SUBMITTED is not the end. Pass 1 ticked the rubric box and left "Send to reviewer?"
+    // unticked, so Snorkel is generating a rubric and will hand the task BACK to us in "Tasks
+    // to be revised" (Rubric guide, lines 30-31). Until this lap existed, SUBMITTED was
+    // terminal — so every submission added one to a queue nothing ever drained, and the moment
+    // a queue gate arrived the whole pipeline deadlocked.
+
+    case S.SUBMITTED: {
+      // Waiting on Snorkel. Poll the revise queue for OUR submission uid; it appears when CI
+      // finishes. Nothing to do but look, so this is cheap and holds no slots.
+      if (!row.submission_id) {
+        await fail(
+          ctx, row, ws, "revise",
+          `This task was submitted but has no Snorkel submission UID recorded, so it cannot be ` +
+            `found in the revise queue and pass 2 can never run for it. The uid is read from the ` +
+            `submission page header during upload.`,
+          true,
+        );
+        return true;
+      }
+
+      let a: Attached | null = null;
+      try {
+        a = await attach();
+        const target = await findInReviseQueue(a, row.submission_id, runDirFor(cfg, slug, "revise"));
+        if (!target) return false; // not back yet — check again next tick
+
+        patchState(ws, { submissionUrl: target.url });
+        await patchTask(row.task_id, {
+          ...(target.assignmentId ? { assignment_id: target.assignmentId } : {}),
+        });
+        await transition(ctx, row, ws, S.REVISE_PENDING, {
+          stage: "revise",
+          message: `Snorkel returned it for revision — the rubric is ready`,
+          detail: { assignment_id: target.assignmentId },
+        });
+      } catch (e) {
+        if (e instanceof BrowserUnavailable) return false; // Chrome is not up; try later
+        await fail(ctx, row, ws, "revise", (e as Error).message, true);
+      } finally {
+        if (a) await detach(a);
+      }
+      return true;
+    }
+
+    case S.REVISE_PENDING:
+    case S.REVISE_RUNNING: {
+      const s = st();
+      const runDir = runDirFor(cfg, slug, `revise-${s.feedbackAttempt}`);
+      let a: Attached | null = null;
+
+      try {
+        if (!s.submissionUrl) throw new FormNotReady("No revise URL recorded for this task.");
+        await transition(ctx, row, ws, S.REVISE_RUNNING, { stage: "revise", message: "reading the reviewer's feedback" });
+
+        a = await attach();
+        const page = await snorkelPage(a, s.submissionUrl);
+
+        // The reviewer's words and the AI-generated rubric. Read from the DOM, per-tab — NOT via
+        // the extension's clipboard button: the clipboard is one global slot and eight concurrent
+        // revisions would hand each other the wrong feedback. Refuses on a partial read.
+        const input = await readReviseInput(page, runDir);
+        await emitEvent({
+          task_id: row.task_id, stage: "revise", status: "heartbeat",
+          message: `reviewer: ${input.feedback.split("\n")[0]!.slice(0, 120)}`,
+        });
+
+        // Claude fixes the TREE and rewrites the RUBRIC, in the same session that built the task
+        // — it still has the whole thing in context, which is the entire reason we resume rather
+        // than start fresh.
+        await fixTask({
+          workspace: ws,
+          sessionId: s.claudeSessionId,
+          template: "06-revise.md",
+          vars: {
+            attempt: s.feedbackAttempt + 1,
+            maxAttempts: 3,
+            feedback: input.feedback,
+            rubric: input.rubric || "(Snorkel generated no rubric for this submission.)",
+          },
+          timeoutMin: cfg.claude.fixTimeoutMin,
+          onProgress: async (m) => {
+            await emitEvent({ task_id: row.task_id, stage: "revise", status: "heartbeat", message: m });
+          },
+        });
+
+        // The revision CHANGED THE TASK. The gate that blessed the old tree says nothing about
+        // the new one, and the explanations describe a task that no longer exists.
+        // From here the task re-walks VERIFY -> ZIP -> EXPLAIN -> UPLOAD -> CHECK FEEDBACK,
+        // the same states as the first build. `pass: 2` is what stops those states from treating
+        // this as a fresh submission and opening a SECOND one.
+        patchState(ws, { explanations: null, feedbackAttempt: s.feedbackAttempt + 1, pass: 2 });
+        await transition(ctx, row, ws, S.VERIFY_RUNNING, {
+          stage: "revise",
+          message: "reviewer feedback applied · re-running the local gate before anything is re-uploaded",
+        });
+      } catch (e) {
+        if (e instanceof RateLimited) return false;
+        await fail(ctx, row, ws, "revise", (e as Error).message, true);
+      } finally {
+        if (a) await detach(a);
+      }
+      return true;
+    }
+
+    case S.AWAITING_REVIEW_APPROVAL:
+      // The SECOND human gate. Tree re-gated, zip re-uploaded, rubric rewritten. The next click
+      // sends it to a person, and it is yours.
+      return false;
+
+    case S.SENDING_TO_REVIEWER: {
+      const s = st();
+      const runDir = runDirFor(cfg, slug, "send-to-reviewer");
+      let a: Attached | null = null;
+      try {
+        if (!s.submissionUrl) throw new FormNotReady("No revise URL recorded for this task.");
+        a = await attach();
+
+        const base = canonicalBaseImage(ws);
+        if (base.canonical === null) {
+          throw new Error(`Cannot attest to the base image — ${base.why}`);
+        }
+
+        const page = await snorkelPage(a, s.submissionUrl);
+
+        // PASS 2. rubric = FALSE, sendToReviewer = TRUE.
+        //
+        // Untick the rubric box: "Submitting with the checkbox checked might cause your rubric
+        // to be overwritten upon submission" — and the rubric is the thing we just spent a Claude
+        // turn rewriting to match the reviewer's complaint.
+        await finaliseForm(page, runDir, {
+          taskId: row.task_id,
+          ahtMinutes: pickAht(),
+          pass: "reviewer",
+          canonicalBaseImage: base.canonical,
+        });
+
+        assertConfirmed("submission.submitButton");
+        const btn = await resolve_(page, "submission.submitButton");
+        await snap(page, runDir, "pre-send-to-reviewer");
+        await btn.click();
+        await page.waitForLoadState("networkidle", { timeout: 60_000 }).catch(() => {});
+        await snap(page, runDir, "post-send-to-reviewer");
+
+        // Pass 2 reconciles INVERSELY to pass 1: a task that has gone to a reviewer LEAVES the
+        // revise queue. So "still in the queue" means the click did not land, and "gone from the
+        // queue" is the success signal — the exact opposite of findSubmitted()'s oracle.
+        const still = await findInReviseQueue(a, row.submission_id!, runDir);
+        if (still) {
+          throw new Error(
+            `Clicked Submit, but the task is STILL in the revise queue. The send-to-reviewer ` +
+              `click did not take. Not retrying automatically — look at ${runDir}.`,
+          );
+        }
+
+        await patchTask(row.task_id, { task_status: TaskStatus.HUMAN_REVIEW });
+        await transition(ctx, row, ws, S.SENT_TO_REVIEWER, {
+          stage: "revise",
+          message: "sent to a human reviewer · task_status → Human review",
+        });
+      } catch (e) {
+        await fail(ctx, row, ws, "revise", (e as Error).message, true);
+      } finally {
+        if (a) await detach(a);
+      }
+      return true;
+    }
+
+    case S.SENT_TO_REVIEWER:
     case S.FAILED:
     case S.NEEDS_HUMAN:
       return false;

@@ -223,6 +223,10 @@
         { "by": "css", "value": "[data-testid='field-submission_aht'] input[type=number]" }
       ]
     },
+    "submission.rubricField": {
+      "description": "'Agent-generated rubric(s)' — the ONE EDITABLE Monaco on the page (aria-autocomplete='both', no disabled overlay). Empty on pass 1; Snorkel's CI fills it and hands the task back; pass 2 rewrites it. The reviewer feedback in the live DOM is almost entirely ABOUT this field ('The rubric does not match the task. Many lines use wrong names...').",
+      "candidates": [{ "by": "testid", "value": "field-test_rubrics" }]
+    },
     "submission.testQualityReportField": {
       "description": "'Test Quality Report (optional)' — a FOURTH Monaco report we never knew about. Populated by CI alongside Summary / Quality check / Agent review.",
       "candidates": [{ "by": "testid", "value": "field-test_quality_judge_report" }]

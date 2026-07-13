@@ -12,7 +12,7 @@ import { NextResponse } from "next/server";
 import { db } from "../../../../../../packages/shared/src/supabase.ts";
 import { PipelineState as S } from "../../../../../../packages/shared/src/status.ts";
 
-type Action = "start" | "approve" | "retry" | "cancel";
+type Action = "start" | "approve" | "approve_review" | "retry" | "cancel";
 
 /**
  * Where a failed task should resume from.
@@ -39,6 +39,16 @@ async function retryTarget(taskId: string): Promise<number> {
 
   const diedIn = data?.[0]?.from_state as number | undefined;
   if (diedIn === undefined || diedIn === null) return S.QUEUED;
+
+  // THE REVISE LAP, FIRST. These states are numerically ABOVE SUBMITTING, so before they were
+  // handled here they fell through every range below and landed on `return S.QUEUED` — which
+  // would rebuild, from scratch, a task that had already been built, gated, submitted, and sent
+  // back by a reviewer. Hours of work and a Claude session's context, thrown away because a
+  // browser click failed.
+  //
+  // A revise-lap failure resumes at REVISE_PENDING: re-open the revise page, re-read the
+  // reviewer's feedback, and carry on. The task is already in the queue; nothing needs rebuilding.
+  if (diedIn >= S.SUBMITTED && diedIn <= S.SENDING_TO_REVIEWER) return S.REVISE_PENDING;
 
   if (diedIn >= S.BUILD_RUNNING && diedIn <= S.FIX_RUNNING) return S.BUILD_RUNNING;
   // Past the zip, the task already passed the local gate → the problem is upload/feedback.
@@ -76,8 +86,17 @@ export async function POST(
       message = "queued for build";
       break;
 
+    // TWO irreversible clicks, two gates, and they are NOT interchangeable.
+    //
+    //   approve         pass 1. Submits to Snorkel's CI. The task will come back with a rubric.
+    //   approve_review  pass 2. Sends the revised task TO A HUMAN REVIEWER. A person's time.
+    //
+    // They are separate actions rather than one "approve" that reads the current state, because
+    // a stale tab is a real thing: the dashboard polls every 3s, and a button rendered for pass 1
+    // must never fire pass 2 just because the task moved on while someone was reading. The
+    // server checks the state it EXPECTS, and 409s otherwise.
+
     case "approve":
-      // The only irreversible click in the system, and it belongs to the human.
       if (cur !== S.AWAITING_APPROVAL) {
         return NextResponse.json(
           { error: `This task is not waiting for approval (it's at state ${cur}).` },
@@ -86,7 +105,19 @@ export async function POST(
       }
       expect = S.AWAITING_APPROVAL;
       patch = { pipeline_state: S.SUBMITTING };
-      message = "approved — submitting";
+      message = "approved — submitting to CI (pass 1 of 2)";
+      break;
+
+    case "approve_review":
+      if (cur !== S.AWAITING_REVIEW_APPROVAL) {
+        return NextResponse.json(
+          { error: `This task is not waiting for review approval (it's at state ${cur}).` },
+          { status: 409 },
+        );
+      }
+      expect = S.AWAITING_REVIEW_APPROVAL;
+      patch = { pipeline_state: S.SENDING_TO_REVIEWER };
+      message = "approved — sending to a human reviewer (pass 2 of 2)";
       break;
 
     case "retry":

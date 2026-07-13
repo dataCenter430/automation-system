@@ -31,7 +31,7 @@ export default function Dashboard() {
    * the task moved while you were looking at it.
    */
   const act = useCallback(
-    async (taskId: string, action: "start" | "approve" | "retry") => {
+    async (taskId: string, action: "start" | "approve" | "approve_review" | "retry") => {
       setBusy(taskId);
       try {
         const r = await fetch(`/api/tasks/${taskId}`, {

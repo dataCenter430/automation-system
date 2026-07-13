@@ -101,7 +101,8 @@ test("a workspace records which task owns it", async () => {
       taskId: "task-A", slug: "shared-slug", pipelineState: 10,
       claudeSessionId: "session-of-A", attempt: 0, feedbackAttempt: 0,
       zipPath: null, explanations: null, submissionUrl: null,
-      feedbackStartedAt: null, lastError: null, updatedAt: new Date().toISOString(),
+      feedbackStartedAt: null, pass: 1, lastError: null,
+      updatedAt: new Date().toISOString(),
     });
 
     const s = readState(ws)!;

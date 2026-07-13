@@ -7,7 +7,7 @@
  * readiness oracle: we never have to guess whether a React textarea took our value.
  */
 import type { Page } from "playwright";
-import { resolve_, pageUrl } from "../browser/selectors.ts";
+import { resolve_, exists, pageUrl } from "../browser/selectors.ts";
 import { attachFile, expandIfCollapsed, fillReliably, setCheckbox, snap } from "../browser/actions.ts";
 import { newTab, type Attached } from "../browser/cdp.ts";
 import { lintInstruction, type InstructionAudit } from "./instruction-audit.ts";
@@ -40,6 +40,53 @@ export async function openNewSubmission(a: Attached, runDir: string): Promise<Pa
   return page;
 }
 
+/**
+ * Attach the zip — over the top of one that is already there, if need be.
+ *
+ * The upload field has TWO STATES, and only one of them contains an `<input type=file>`:
+ *
+ *   empty     a dropzone, with the (hidden) file input we set.
+ *   attached  a green success card naming the file, with Download / View / **Remove** buttons.
+ *             The input is GONE from the DOM entirely.
+ *
+ * Pass 1 always meets the empty state. Every revision meets the attached one — the zip we
+ * uploaded last time is still there. Calling setInputFiles() then throws SelectorNotFound and
+ * reports "the page has changed", when the page is exactly as it should be.
+ *
+ * So: if a file is attached, click Remove and wait for the input to come back.
+ */
+export async function attachZip(page: Page, runDir: string, zipPath: string): Promise<void> {
+  if (await exists(page, "submission.zipRemove", { timeoutMs: 2000 })) {
+    const had = await exists(page, "submission.zipFilename", { timeoutMs: 1000 })
+      ? (await (await resolve_(page, "submission.zipFilename")).innerText()).trim()
+      : "a file";
+    await (await resolve_(page, "submission.zipRemove")).click();
+
+    // The dropzone must actually come back. Clicking Remove and then setting a file input that
+    // is not there yet is a race we would lose intermittently and blame on Snorkel.
+    await resolve_(page, "submission.zipInput", { timeoutMs: 10_000 });
+    await snap(page, runDir, "zip-removed");
+    void had;
+  }
+
+  await attachFile(page, "submission.zipInput", zipPath);
+
+  // Prove it took. The filename Snorkel renders back is the only evidence that the upload
+  // landed — and on a revision, an attach that silently no-ops would re-submit the OLD zip
+  // under a changelog claiming it was fixed.
+  const want = zipPath.split(/[\\/]/).pop()!;
+  const shown = await resolve_(page, "submission.zipFilename", { timeoutMs: 30_000 });
+  await shown.waitFor({ state: "visible", timeout: 30_000 });
+  const got = (await shown.innerText()).trim();
+  if (!got.includes(want)) {
+    throw new FormNotReady(
+      `The zip did not attach: the form still shows "${got}", not "${want}". Refusing to ` +
+        `continue — submitting now would send the wrong archive.`,
+    );
+  }
+  await snap(page, runDir, "zip-attached");
+}
+
 export async function fillSubmissionForm(args: {
   page: Page;
   runDir: string;
@@ -53,8 +100,7 @@ export async function fillSubmissionForm(args: {
   // line depends on it.
   await expandIfCollapsed(page, "submission.section");
 
-  await attachFile(page, "submission.zipInput", zipPath);
-  await snap(page, runDir, "zip-attached");
+  await attachZip(page, runDir, zipPath);
 
   await fillReliably(page, "submission.difficultyExplanation", explanations.difficulty);
   await fillReliably(page, "submission.solutionExplanation", explanations.solution);

@@ -37,7 +37,7 @@ export interface TerminusImplementationRow {
 
 export type EventStage =
   | "parse" | "build" | "verify" | "fix" | "probe" | "zip"
-  | "explain" | "upload" | "feedback" | "submit" | "sync";
+  | "explain" | "upload" | "feedback" | "submit" | "sync" | "revise";
 
 export type EventStatus = "started" | "completed" | "failed" | "heartbeat";
 

@@ -224,6 +224,54 @@ export async function readFieldMonaco(page: Page, fieldKey: string): Promise<str
 }
 
 /**
+ * Write into a Monaco editor — the rubric box, which is the one editable one.
+ *
+ * NOT by typing. The generated rubric is hundreds of lines; `pressSequentially` would take
+ * minutes and Monaco's auto-indent and bracket-closing would mangle it on the way in. We set the
+ * MODEL's value, which is what Monaco's own API is for, and which fires the change events the
+ * React binding is listening for — so the form sees it and autosaves it.
+ *
+ * Verified by reading it back. A silent no-op here would send a reviewer the AI's untouched
+ * synthetic rubric while the log claimed we had rewritten it.
+ */
+export async function writeFieldMonaco(page: Page, fieldKey: string, text: string): Promise<void> {
+  const field = await resolve_(page, fieldKey);
+  const editor = field.locator("[data-uri]").first();
+  if ((await editor.count()) === 0) {
+    throw new Error(`Cannot write "${fieldKey}": it has no Monaco editor on this page.`);
+  }
+
+  const uri = await editor.getAttribute("data-uri");
+  if (!uri) throw new Error(`Cannot write "${fieldKey}": its editor has no data-uri.`);
+
+  const ok = await page.evaluate(
+    ({ uri, text }) => {
+      const m = (globalThis as any).monaco;
+      if (!m?.editor?.getModels) return false;
+      const model = m.editor.getModels().find((x: any) => String(x.uri) === uri);
+      if (!model) return false;
+      model.setValue(text);
+      return true;
+    },
+    { uri, text },
+  );
+  if (!ok) {
+    throw new Error(
+      `Cannot write "${fieldKey}": window.monaco is not reachable, or the model (${uri}) is gone. ` +
+        `Refusing to pretend the rubric was updated.`,
+    );
+  }
+
+  const got = await readFieldMonaco(page, fieldKey);
+  if (got?.trim() !== text.trim()) {
+    throw new Error(
+      `Wrote "${fieldKey}" but it read back different (${got?.length ?? 0} chars vs ${text.length}). ` +
+        `The editor rejected the value.`,
+    );
+  }
+}
+
+/**
  * Read the RENDERED lines. The output of this function is EVIDENCE OF FAILURE ONLY.
  *
  * It may never be used to conclude that a check passed, and callers must mark anything it

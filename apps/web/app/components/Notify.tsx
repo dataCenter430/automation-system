@@ -31,7 +31,13 @@ const WANTS_YOU: Record<number, { title: string; body: (slug: string) => string;
   },
   70: {
     title: "Ready to submit",
-    body: (s) => `${s} passed Snorkel's checks. The Submit click is yours.`,
+    body: (s) => `${s} passed Snorkel's checks. The Submit click is yours. (Pass 1 of 2 — it will come back with a rubric.)`,
+    urgent: true,
+  },
+  96: {
+    title: "Ready for a human reviewer",
+    body: (s) =>
+      `${s} was revised, re-gated and its rubric rewritten. Approving sends it to a PERSON — that click is yours.`,
     urgent: true,
   },
 };

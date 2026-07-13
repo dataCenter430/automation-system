@@ -29,13 +29,13 @@ import { fmtElapsed, sinceOf, stateMeta, useNow, type Task } from "./Shell";
  */
 
 /** The states that genuinely block on a person. Everything else resolves itself. */
-const BLOCKED_ON_YOU = [70, -2, -1];
+const BLOCKED_ON_YOU = [96, 70, -2, -1];
 
 export function AwaitingHuman({
   tasks, onAct, busy, selected, onSelect,
 }: {
   tasks: Task[];
-  onAct: (taskId: string, action: "approve" | "retry") => void;
+  onAct: (taskId: string, action: "approve" | "approve_review" | "retry") => void;
   busy: string | null;
   selected: string | null;
   onSelect: (taskId: string) => void;
@@ -119,7 +119,8 @@ export function AwaitingHuman({
             const meta = stateMeta(t.pipeline_state);
             const since = sinceOf(t);
             const isSelected = selected === t.task_id;
-            const approve = t.pipeline_state === 70;
+            const approve = t.pipeline_state === 70;   // pass 1 -> Snorkel's CI
+            const review  = t.pipeline_state === 96;   // pass 2 -> a human reviewer
 
             return (
               <div
@@ -155,22 +156,39 @@ export function AwaitingHuman({
                   {t.slug ?? t.task_id.slice(0, 8)}
                 </div>
 
-                {approve ? (
+                {approve || review ? (
                   <button
                     className="mono"
                     disabled={busy === t.task_id}
                     onClick={(e) => {
                       e.stopPropagation();
-                      // The one click that cannot be taken back.
-                      if (confirm("Submit to Snorkel? This cannot be undone.")) onAct(t.task_id, "approve");
+                      // Two irreversible clicks, and they are NOT the same click.
+                      //
+                      // Pass 1 submits to Snorkel's CI — a machine reads it, and the task comes
+                      // back with a rubric. Pass 2 sends the revised task to a PERSON. The second
+                      // one spends a human reviewer's time and puts your name in front of them,
+                      // so it says so, in those words, rather than reusing "Submit".
+                      const ok = review
+                        ? confirm(
+                            "Send this to a HUMAN REVIEWER?\n\n" +
+                              "The rubric has been rewritten and the task re-gated. This is the " +
+                              "click that puts it in front of a person. It cannot be undone.",
+                          )
+                        : confirm(
+                            "Submit to Snorkel's CI?\n\n" +
+                              "This is pass 1 of 2: Snorkel will generate a rubric and hand the " +
+                              "task back for revision. It cannot be undone.",
+                          );
+                      if (ok) onAct(t.task_id, review ? "approve_review" : "approve");
                     }}
                     style={{
                       width: "100%", padding: "7px 10px", fontSize: 10, letterSpacing: "0.1em",
                       textTransform: "uppercase", fontWeight: 700,
-                      background: "var(--grad-approve)", color: "#04220f", border: "none",
+                      background: review ? "var(--grad-brand, var(--grad-approve))" : "var(--grad-approve)",
+                      color: "#04220f", border: "none",
                     }}
                   >
-                    Approve &amp; Submit
+                    {review ? "Send to reviewer" : "Approve & Submit"}
                   </button>
                 ) : (
                   <button

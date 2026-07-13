@@ -31,6 +31,22 @@ export interface LocalState {
   submissionUrl: string | null;
   /** Set while parked in CHECKING_FEEDBACK so a restart knows how long it has waited. */
   feedbackStartedAt: string | null;
+
+  /**
+   * WHICH HALF OF THE SUBMISSION ARE WE ON.
+   *
+   *   1  the CI pass. Tick the rubric box, leave "Send to reviewer?" unticked, submit. Snorkel
+   *      generates the rubric and hands the task back. This is a NEW submission.
+   *   2  the reviewer pass. The task is on its revise page. Fix what the reviewer said, rewrite
+   *      the rubric, re-zip, re-upload OVER the existing one, untick the rubric box, tick
+   *      "Send to reviewer?", submit.
+   *
+   * The revise lap re-enters VERIFY_RUNNING and then walks the SAME states as the first build —
+   * gate, zip, explain, upload, check feedback. Without this flag those states cannot tell the
+   * two passes apart, and pass 2 would open a brand-new submission and submit it as pass 1 all
+   * over again: a duplicate submission, and the reviewer would never get the task.
+   */
+  pass: 1 | 2;
   lastError: string | null;
   updatedAt: string;
 }

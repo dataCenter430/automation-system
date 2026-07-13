@@ -138,8 +138,18 @@ export const STATE_META: Record<number, StateMeta> = {
   67: { name: "FEEDBACK FAILED",   color: "var(--warn)", live: false, hint: "Snorkel's checks came back red. The remote fixer is coming — wait." },
   69: { name: "REMOTE FIX",        color: "var(--run)",  live: true,  hint: "Claude is fixing what Snorkel's checks rejected" },
   70: { name: "AWAITING APPROVAL", color: "var(--ok)",   live: false, hint: "Snorkel's checks are green. The irreversible click is yours." },
-  80: { name: "SUBMITTING",        color: "var(--run)",  live: true,  hint: "submitting — this one cannot be taken back" },
-  90: { name: "SUBMITTED",         color: "var(--ok)",   live: false, hint: "done" },
+  80: { name: "SUBMITTING",        color: "var(--run)",  live: true,  hint: "submitting to CI — this one cannot be taken back" },
+
+  // ---- PASS 2. A submitted task is HALF done, and saying "done" here was the lie that made
+  // the whole pipeline deadlock: pass 1 deliberately bounces the task back so Snorkel can
+  // generate its rubric (Rubric guide, lines 30-31). Only pass 2 reaches a human reviewer.
+  90: { name: "SUBMITTED",         color: "var(--run)",  live: true,  hint: "pass 1 landed — Snorkel is generating the rubric and will hand it back" },
+  92: { name: "REVISE PENDING",    color: "var(--run)",  live: true,  hint: "it's back in the revise queue. Opening it." },
+  94: { name: "REVISING",          color: "var(--run)",  live: true,  hint: "reading the reviewer, fixing the tree, rewriting the rubric" },
+  96: { name: "REVIEW APPROVAL",   color: "var(--brand)", live: false, hint: "revision is green. Approving SENDS IT TO A PERSON." },
+  98: { name: "SENDING",           color: "var(--run)",  live: true,  hint: "sending to the reviewer — cannot be taken back" },
+  100:{ name: "WITH REVIEWER",     color: "var(--ok)",   live: false, hint: "done — a human reviewer has it" },
+
   [-1]: { name: "FAILED",          color: "var(--bad)",  live: false, hint: "it died. Read last_error, then Retry." },
   [-2]: { name: "NEEDS HUMAN",     color: "var(--bad)",  live: false, hint: "it stopped and refused to guess. Go and look." },
 };

@@ -126,35 +126,47 @@ export function GateVerdict({ taskId }: { taskId: string | null }) {
       ) : !v ? (
         <p style={{ margin: 0, fontSize: 12.5, color: "var(--dim)" }}>Reading the gate artifacts…</p>
       ) : (
-        <div>
+        /* Five cards, not five list rows.
+           A card gives each check its own edge, which matters more here than it looks: these
+           five are not a list of facts about one thing, they are five INDEPENDENT verdicts, and
+           a skipped one has to read as a distinct object that did not happen — not as a dimmer
+           line in a paragraph. The circular glyph carries the verdict; the ordinal carries the
+           ORDER, which is what tells you WHERE the gate stopped, because the gate short-circuits. */
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {v.checks.map((c) => (
             <div
               key={c.id}
+              className="gate-card"
               style={{
-                display: "flex", gap: 9, alignItems: "flex-start",
-                padding: "9px 0", borderTop: "1px solid var(--line)",
-                opacity: c.status === "skipped" ? 0.55 : 1,
+                opacity: c.status === "skipped" ? 0.62 : 1,
+                // The card's own edge takes the verdict colour on a failure. A red tick on a
+                // grey card is a detail; a red-edged card is the thing your eye lands on.
+                borderColor: c.status === "fail" ? "var(--bad)" : "var(--line)",
+                background: c.status === "fail" ? "rgba(244, 63, 94, 0.06)" : "var(--panel2)",
               }}
             >
               <span
-                className={c.status === "pending" ? "mono pulse" : "mono"}
-                style={{ color: COLOR[c.status], fontSize: 12, lineHeight: "16px", width: 12, flexShrink: 0 }}
+                className={c.status === "pending" ? "gate-glyph pulse" : "gate-glyph"}
+                style={{ color: COLOR[c.status] }}
+                aria-hidden
               >
                 {GLYPH[c.status]}
               </span>
 
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                   <span
                     className="mono"
                     style={{
                       fontSize: 10.5, letterSpacing: "0.1em", textTransform: "uppercase",
+                      fontWeight: 600,
                       color: c.status === "skipped" ? "var(--dim)" : "var(--text)",
                     }}
                   >
                     {c.label}
                   </span>
-                  {/* Said out loud, not merely implied by a grey tick. */}
+                  {/* Said out loud, not merely implied by a grey tick. A check that did not run
+                      is NEVER a check that passed. */}
                   {c.status === "skipped" && (
                     <span
                       className="mono"
@@ -173,10 +185,9 @@ export function GateVerdict({ taskId }: { taskId: string | null }) {
                 </div>
               </div>
 
-              {/* 01–05, down the right edge. */}
-              <span className="mono num" style={{ fontSize: 10, color: "var(--dim)", flexShrink: 0, opacity: 0.7 }}>
-                {String(c.n).padStart(2, "0")}
-              </span>
+              {/* 01–05. The ORDER is the information: the gate short-circuits, so the number of
+                  the last card that ran is the number of the step that stopped it. */}
+              <span className="gate-ord">{String(c.n).padStart(2, "0")}</span>
             </div>
           ))}
 

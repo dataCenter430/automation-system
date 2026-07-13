@@ -95,25 +95,82 @@ textarea { font-family: var(--mono); font-size: 13px; }
 input:focus, textarea:focus { outline: none; border-color: var(--violet); }
 a { color: inherit; }
 
-/* Three regions. Wide content scrolls inside itself; the page body never scrolls sideways. */
+/* ---------------------------------------------------------------------------------------
+   FOUR REGIONS, and the shape is load-bearing rather than decorative.
+
+   +------+---------------------------------------+
+   | rail |  table          (spans the full width) |
+   |      +--------------------------+------------+
+   |      |  transcript              |  gate      |
+   +------+--------------------------+------------+
+
+   The TABLE gets the whole width because it is the thing you scan: eight rows, six columns,
+   and every one of them is a number or a state you are comparing ACROSS rows. Squeezing it
+   into a middle column to keep a third rail company would cost the comparison, which is the
+   only reason the table exists.
+
+   The GATE drops BELOW it, beside the transcript, because both answer the same question —
+   "what happened to the row I just clicked?" — and they should be read together. A gate
+   verdict pinned to the top-right, level with a table row it has nothing to do with, is just
+   a panel that happens to be nearby.
+
+   The RAIL spans both rows: "is anything waiting on me?" is not scoped to a selection.
+   --------------------------------------------------------------------------------------- */
 .grid {
   display: grid; gap: 16px; align-items: start;
-  grid-template-columns: 264px minmax(0, 1fr) 340px;
-  grid-template-areas: "rail main gate";
+  grid-template-columns: 272px minmax(0, 1fr) 344px;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    "rail table table"
+    "rail main  gate";
 }
-.rail { grid-area: rail; min-width: 0; }
-.main { grid-area: main; min-width: 0; }
-.gate { grid-area: gate; min-width: 0; }
-/* 264 rail + 340 gate + gaps + padding = ~676px of furniture; below ~1150 the centre column
-   stops being wide enough to hold the table, so the gate drops under it rather than
-   squeezing the thing you are actually reading. A 1280px laptop keeps all three. */
-@media (max-width: 1150px) {
-  .grid { grid-template-columns: 264px minmax(0, 1fr); grid-template-areas: "rail main" "gate gate"; }
+.rail  { grid-area: rail;  min-width: 0; }
+.table { grid-area: table; min-width: 0; }
+.main  { grid-area: main;  min-width: 0; }
+.gate  { grid-area: gate;  min-width: 0; }
+
+/* Below ~1250 the transcript stops being wide enough to read a tool call in, so the gate
+   goes under it rather than squeezing the thing you are actually reading. */
+@media (max-width: 1250px) {
+  .grid {
+    grid-template-columns: 272px minmax(0, 1fr);
+    grid-template-areas: "rail table" "rail main" "rail gate";
+  }
 }
 @media (max-width: 900px) {
-  .grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "main" "rail" "gate"; }
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "table" "rail" "main" "gate";
+  }
 }
 .scroll-x { overflow-x: auto; }
+
+/* The meter bars in the top bar. Gradient fill, hairline track. */
+.meter-track {
+  height: 3px; border-radius: 3px; background: var(--line); overflow: hidden;
+}
+.meter-fill {
+  display: block; height: 100%; border-radius: 3px;
+  background: var(--grad-primary);
+  transition: width 300ms ease;
+}
+
+/* A numbered gate card: circular verdict glyph, title, detail, ordinal. */
+.gate-card {
+  display: flex; align-items: flex-start; gap: 10px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel2); padding: 11px 12px;
+}
+.gate-glyph {
+  width: 18px; height: 18px; border-radius: 50%; flex: none; margin-top: 1px;
+  display: grid; place-items: center;
+  font: 700 10px/1 var(--mono);
+  border: 1px solid currentColor;
+}
+.gate-ord {
+  font: 10px/1 var(--mono); color: var(--dim);
+  font-variant-numeric: tabular-nums; flex: none; margin-top: 3px;
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

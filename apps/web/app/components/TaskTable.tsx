@@ -112,10 +112,24 @@ export function TaskTable({
                   </span>
 
                   <span style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+                    {/* The chevron marks the row whose transcript and gate verdict are showing
+                        below. The row's background changes too, but a background is a weak
+                        signal on a dark table with eight rows and a coloured stripe on each —
+                        the caret is the one mark that says "this one, the one you clicked". */}
+                    <span
+                      className="mono"
+                      aria-hidden
+                      style={{
+                        color: "var(--brand)", fontSize: 11, flex: "none", width: 8,
+                        opacity: isSel ? 1 : 0,
+                      }}
+                    >
+                      ›
+                    </span>
                     <span
                       className="mono"
                       style={{
-                        fontSize: 12, color: "var(--text)",
+                        fontSize: 12, color: "var(--text)", fontWeight: isSel ? 600 : 400,
                         overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                       }}
                       title={t.title}
@@ -157,7 +171,11 @@ export function TaskTable({
                       color: t.costPartial ? "var(--warn)" : t.costUsd === null ? "var(--dim)" : "var(--text)",
                     }}
                   >
-                    {t.costUsd === null ? "—" : `$${t.costUsd.toFixed(2)}${t.costPartial ? "*" : ""}`}
+                    {/* Four decimals, not two. A build turn costs cents, and $0.02 vs $0.05 is
+                        the difference between a task that went cleanly and one that burned two
+                        fix attempts — rounding it to the penny throws that away. (It is an
+                        API-equivalent figure, not a bill: see claude/no-billing.ts.) */}
+                    {t.costUsd === null ? "—" : `$${t.costUsd.toFixed(4)}${t.costPartial ? "*" : ""}`}
                   </span>
 
                   <span className="mono num" style={{ fontSize: 11, color: "var(--dim)", textAlign: "right" }}>

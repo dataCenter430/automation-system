@@ -74,11 +74,14 @@ export default function Dashboard() {
           onSelect={(id) => setSelected(id)}
         />
 
-        <div className="main" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {/* Above everything, including the table. A question is a live Claude session frozen
-              mid-turn holding a build slot — it is the only thing on this page where YOUR
-              silence is actively costing something. It gets the top of the column, and it does
-              not go in the narrow rail, because it needs room to be read and answered. */}
+        {/* THE TABLE gets the full width, above everything else. It is the thing you SCAN —
+            eight rows, six columns, every one of them a number or a state you are comparing
+            ACROSS rows. That comparison is the only reason it exists, and a narrow middle
+            column would cost it. */}
+        <div className="table" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {/* Except for this. A question is a live Claude session frozen mid-turn, holding a
+              build slot — the one thing on this page where YOUR silence is actively costing
+              something. It outranks the table. */}
           {tasks
             .filter((t) => t.question)
             .map((t) => (
@@ -86,6 +89,11 @@ export default function Dashboard() {
             ))}
 
           <TaskTable tasks={tasks} selected={selected} onSelect={setSelected} onAct={act} busy={busy} />
+        </div>
+
+        {/* Below it, side by side: what happened to the row you just clicked. The transcript
+            and the gate verdict answer the same question and are read together. */}
+        <div className="main" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           {sel && <Detail t={sel} events={events} />}
         </div>
 
@@ -184,7 +192,7 @@ function Detail({ t, events }: { t: Task; events: EventRow[] }) {
           result, the cost and the model badge — and it polls only while the build is live. */}
       <div style={{ marginTop: 13, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
         <div className="hdr" style={{ marginBottom: 7 }}>Session</div>
-        <SessionView taskId={t.task_id} live={CLAUDE_LIVE.has(t.pipeline_state)} />
+        <SessionView taskId={t.task_id} live={CLAUDE_LIVE.has(t.pipeline_state)} slug={t.slug} />
       </div>
     </section>
   );

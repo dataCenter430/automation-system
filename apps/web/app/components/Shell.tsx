@@ -355,7 +355,17 @@ export function Shell({ children }: { children: React.ReactNode }) {
               className="mono"
               style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.2em", color: "var(--text)" }}
             >
-              FLEET
+              FLEET{" "}
+              <span
+                style={{
+                  background: "var(--grad-primary)",
+                  WebkitBackgroundClip: "text",
+                  backgroundClip: "text",
+                  color: "transparent",
+                }}
+              >
+                ALPHA
+              </span>
             </span>
           </div>
 

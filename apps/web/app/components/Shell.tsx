@@ -383,9 +383,25 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 background: "var(--panel)",
               }}
             >
-              <span style={{ color: "var(--dim)" }}>Total Burn </span>
-              {burn}
+              {/*
+                NOT A BILL. This number is what the same tokens WOULD have cost on the metered
+                API. Nothing in this system can be billed: every Claude call goes through the
+                Agent SDK -> the Claude Code CLI -> the ~/.claude subscription, which is a flat
+                fee. There is no API key in the codebase, and claude/no-billing.ts strips
+                ANTHROPIC_API_KEY out of the environment before every spawn so a stray shell
+                variable cannot quietly put you on metered billing.
+
+                It is still worth showing — it is the only honest measure of how much work a
+                build actually did, and it is what tells you a task burned three fix attempts.
+                But labelling it "Total Burn $16.66" invites exactly one reading, and it is the
+                wrong one.
+              */}
+              <span style={{ color: "var(--dim)" }}>Compute </span>
+              ≈{burn}
               {fleet?.burnPartial ? " *" : ""}
+              <span style={{ color: "var(--dim)", fontWeight: 400, marginLeft: 6 }}>
+                not billed
+              </span>
             </span>
 
             {mounted && <Notify tasks={tasks} />}

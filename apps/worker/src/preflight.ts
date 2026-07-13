@@ -10,6 +10,7 @@ import { existsSync, statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { homedir } from "node:os";
+import { billingVarsPresent } from "./claude/no-billing.ts";
 import { join } from "node:path";
 import { REPO_ROOT, snorkelRoot } from "../../../packages/shared/src/paths.ts";
 import * as docker from "./docker/runner.ts";
@@ -42,6 +43,46 @@ async function checkDocker(): Promise<Check> {
           : "Start the daemon: `sudo systemctl start docker`.";
     return { name: "Docker daemon", ok: false, detail: msg.split("\n")[0]!, fix, required: true };
   }
+}
+
+/**
+ * NOTHING IN THIS SYSTEM MAY BE BILLED PER TOKEN.
+ *
+ * Every Claude call goes through the Agent SDK -> the Claude Code CLI -> the subscription in
+ * ~/.claude. A subscription is a flat fee: usage burns rate limit, not money. There is no API key
+ * in this codebase and there must never be one.
+ *
+ * The way that breaks is not code — it is an environment variable someone else set. ANTHROPIC_API_KEY
+ * in a ~/.bashrc from another project, a CI runner's secret store, a direnv .envrc two directories
+ * up: the CLI sees it, stops using the subscription, and starts billing that key, metered, per
+ * token. Nothing looks different. Builds still succeed. The invoice arrives later.
+ *
+ * claude/no-billing.ts LAUNDERS the environment at every spawn, so even if one of these is set we
+ * do not pass it on — that is what actually makes it safe. This check exists so you find out at
+ * BOOT that your shell is trying to bill you, rather than never finding out at all.
+ */
+function checkNoBilling(): Check {
+  const set = billingVarsPresent();
+  if (set.length === 0) {
+    return {
+      name: "Billing",
+      ok: true,
+      detail: "subscription only — no API key in the environment (nothing here can be metered)",
+      required: true,
+    };
+  }
+  return {
+    name: "Billing",
+    ok: true, // not `false`: we STRIP these, so the run is still safe. But you must be told.
+    detail:
+      `${set.join(", ")} ${set.length === 1 ? "is" : "are"} set in this shell — STRIPPED from every ` +
+      `Claude call, so nothing will be billed. But something in your environment is trying to.`,
+    fix:
+      `Unset ${set.join(" and ")} (check ~/.bashrc, ~/.zshrc, any .envrc, and your CI env). ` +
+      `The worker deletes these before spawning Claude — see apps/worker/src/claude/no-billing.ts — ` +
+      `so you are not being charged. This is a warning that your shell disagrees with that.`,
+    required: false,
+  };
 }
 
 function checkClaudeLogin(): Check {
@@ -149,6 +190,7 @@ function checkSkeleton(): Check {
 
 export async function preflight(): Promise<Check[]> {
   return [
+    checkNoBilling(),
     checkClaudeLogin(),
     await checkDocker(),
     await checkSupabase(),

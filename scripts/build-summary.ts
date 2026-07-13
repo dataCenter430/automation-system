@@ -24,6 +24,7 @@ import { relative, resolve } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { REPO_ROOT, snorkelRoot } from "../packages/shared/src/paths.ts";
 import { loadConfig } from "../apps/worker/src/config.ts";
+import { subscriptionEnv } from "../apps/worker/src/claude/no-billing.ts";
 
 /**
  * The docs that actually describe the task contract, listed explicitly rather than globbed:
@@ -677,6 +678,9 @@ async function runSession(
         // Bypass is load-bearing, not laziness: the docs live under SNORKEL_ROOT, OUTSIDE cwd,
         // and every read of them would otherwise stop for approval in an unattended script.
         permissionMode: "bypassPermissions",
+        // Laundered — see claude/no-billing.ts. This script spawns a long Claude session and
+        // would inherit ANTHROPIC_API_KEY straight from the shell that launched it.
+        env: subscriptionEnv(),
         systemPrompt: { type: "preset", preset: "claude_code" },
         // `tools` is what actually restricts the session; `allowedTools` only auto-approves, and
         // under bypassPermissions nothing prompts anyway — so an allowedTools list would have left

@@ -33,6 +33,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { subscriptionEnv } from "../claude/no-billing.ts";
 import { blockedCategories } from "../../../../packages/shared/src/taxonomy.ts";
 
 const CATEGORIES = [
@@ -165,6 +166,10 @@ async function ask(prompt: string, model: string, timeoutMs: number): Promise<an
     const stream = query({
       prompt,
       options: {
+        // The SDK defaults `env` to process.env, so this session would inherit ANTHROPIC_API_KEY
+        // and bill it. The classifier runs on every gate — it is the LAST thing that should be
+        // quietly metered. See claude/no-billing.ts.
+        env: subscriptionEnv(),
         cwd: "/tmp",
         model,
         abortController: abort,

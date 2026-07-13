@@ -35,6 +35,7 @@ import { z } from "zod";
 import { RateLimited, looksRateLimited } from "./errors.ts";
 import { askHuman, blockedCount, clearQuestion } from "./ask.ts";
 import { judge } from "./guard.ts";
+import { subscriptionEnv } from "./no-billing.ts";
 import { Semaphore } from "../util/semaphore.ts";
 import { loadConfig } from "../config.ts";
 
@@ -334,10 +335,14 @@ async function runTurnInner(args: RunTurnArgs): Promise<TurnResult> {
         // calls will run longer than 60s, override CLAUDE_CODE_STREAM_CLOSE_TIMEOUT." A tool
         // that waits for a person WILL run longer than 60 seconds. Without this the transport
         // tears the session down mid-question and the whole feature is a hang.
-        env: {
-          ...process.env,
+        // LAUNDERED, not spread. `{...process.env}` would hand the child ANTHROPIC_API_KEY if it
+        // happened to be set — by a stray line in ~/.bashrc, a CI runner, another tool's installer
+        // — and the CLI would silently stop using the subscription and start billing that key,
+        // metered, per token. Nothing in the code would change; the invoice would arrive later.
+        // subscriptionEnv() deletes every variable that could route a call off the subscription.
+        env: subscriptionEnv({
           CLAUDE_CODE_STREAM_CLOSE_TIMEOUT: String(askTimeoutMin * 60_000 + 120_000),
-        },
+        }),
         // There is no human at the keyboard, so every tool call is decided by guard.ts:
         // writes must stay inside this workspace, and a short list of shell constructs a
         // task build never needs is refused. NOT 'bypassPermissions' — an unattended agent

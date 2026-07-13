@@ -75,9 +75,53 @@ export interface TaskToml {
   category: string;
   subcategories: string[];
   languages: string[];
+  /**
+   * Labels we did not recognise and passed through anyway.
+   *
+   * Shown in the preview so the human can see what we guessed, but NEVER fatal. See below.
+   */
+  warnings: string[];
 }
 
 export class TaxonomyError extends Error {}
+
+/**
+ * AN UNKNOWN LABEL IS NOT AN ERROR.
+ *
+ * This used to throw on anything the table did not know, and it was wrong twice in one day:
+ * "Security & Cryptography" (a spelling we had not listed) and then "HCL" (a language we had never
+ * seen). Both were perfectly good tasks, and both were refused at the door by OUR lookup table
+ * rather than by anything Snorkel actually requires.
+ *
+ * Snorkel adds languages and categories whenever it likes. A closed table on our side is a promise
+ * we cannot keep, and every new value it does not contain is an operator staring at a paste box
+ * being told to go and edit a JSON file. `languages` is free-form in task.toml anyway — the
+ * playbook's own template is just `languages = ["bash"]`.
+ *
+ * So: an unrecognised label is SLUGIFIED into the shape task.toml wants, passed through, and
+ * reported as a warning. If we guessed wrong, Snorkel's `validate_task_fields` will say so, and
+ * that is a check that is actually authoritative — unlike this file.
+ *
+ * -------------------------------------------------------------------------------------------
+ * WITH EXACTLY ONE EXCEPTION, AND IT STAYS.
+ *
+ * A BLOCKED category is still refused, loudly, at paste time. That is not vocabulary validation —
+ * it is the guard that caught two of our three rejections (software-engineering 0.95,
+ * data-processing 0.90). Slugifying an unknown label actually makes it STRONGER: "Software
+ * Engineering" now folds to "software-engineering" and is refused whether or not anyone remembered
+ * to map it.
+ */
+function slugifyCategory(label: string): string {
+  return normaliseLabel(label).replace(/\s+/g, "-");
+}
+function slugifySub(label: string): string {
+  return normaliseLabel(label).replace(/\s+/g, "_");
+}
+function slugifyLanguage(label: string): string {
+  // Languages are free-form. Keep it recognisable: "HCL" -> "hcl", "F#" -> "f#", "Objective-C"
+  // -> "objective-c". No hyphen-to-underscore games; this is a name, not an enum.
+  return label.trim().toLowerCase().replace(/\s+/g, "-");
+}
 
 /**
  * The categories Snorkel is not currently accepting, read from config/taxonomy.json.
@@ -107,25 +151,25 @@ export function toTaskToml(parsed: {
   languages: string;
 }): TaskToml {
   const t = load();
+  const warnings: string[] = [];
 
-  const category = lookup(t.category, parsed.category);
-  if (!category) {
-    // The old message listed $allowed — the task.toml ENUM values — at somebody who had just
-    // pasted a LABEL. So it answered a question nobody asked ("which enums are legal?") instead of
-    // the one they had ("what do I write, and where?"), and the obvious "fix" was to paste the
-    // label into $allowed, which made the error contradict itself: unknown, and listed as allowed.
-    throw new TaxonomyError(
-      `Unknown category ${JSON.stringify(parsed.category)}.\n\n` +
-        `It is not a task.toml value — it is the label Snorkel's platform shows — so it has to be ` +
-        `MAPPED to one. Add a line to the "category" table in config/taxonomy.json:\n\n` +
-        `    "${normaliseLabel(parsed.category)}": "<one of: ${(t.category.$allowed as string[]).join(" | ")}>"\n\n` +
-        `Labels currently recognised:\n` +
-        knownLabels(t.category).map((l) => `  - ${l}  ->  ${t.category[l] as string}`).join("\n"),
+  // ---- category: mapped if we know it, slugified if we do not. NEVER fatal for being unknown. --
+  const category = lookup(t.category, parsed.category) ?? slugifyCategory(parsed.category);
+  if (!lookup(t.category, parsed.category)) {
+    warnings.push(
+      `Category "${parsed.category}" is not in config/taxonomy.json — using "${category}". ` +
+        `If that is wrong, Snorkel's validate_task_fields will say so; add a mapping to silence this.`,
     );
   }
 
-  // Snorkel is not currently accepting these. Reject at parse time — the human is looking
-  // at the preview right now, and discovering this after a 45-minute build would be waste.
+  // ---- THE ONE REFUSAL THAT STAYS -------------------------------------------------------------
+  //
+  // Snorkel is not currently accepting these, and a task that is one of them is rejected outright
+  // — after a 45-minute build, if nobody catches it here. This is not vocabulary validation; it is
+  // the guard that caught two of our three rejections.
+  //
+  // Slugifying unknowns makes it STRONGER, not weaker: "Software Engineering" folds to
+  // "software-engineering" and is refused whether or not anyone remembered to map it.
   const blocked = ((t.category.$blocked as { categories?: string[] } | undefined)?.categories) ?? [];
   if (blocked.includes(category)) {
     throw new TaxonomyError(
@@ -136,31 +180,27 @@ export function toTaskToml(parsed: {
     );
   }
 
+  // ---- subcategories: same rule. ---------------------------------------------------------------
   const subcategories: string[] = [];
-  for (const raw of parsed.sub_category.split(",").map((s) => s.trim()).filter(Boolean)) {
-    const sub = lookup(t.subcategory, raw);
-    if (!sub) {
-      throw new TaxonomyError(
-        `Unknown sub-category ${JSON.stringify(raw)}.\n\n` +
-          `Add a line to the "subcategory" table in config/taxonomy.json:\n\n` +
-          `    "${normaliseLabel(raw)}": "<one of: ${(t.subcategory.$allowed as string[]).join(" | ")}>"\n\n` +
-          `Labels currently recognised:\n` +
-          knownLabels(t.subcategory).map((l) => `  - ${l}  ->  ${t.subcategory[l] as string}`).join("\n"),
-      );
+  for (const raw of parsed.sub_category.split(/[,/]/).map((s) => s.trim()).filter(Boolean)) {
+    const sub = lookup(t.subcategory, raw) ?? slugifySub(raw);
+    if (!lookup(t.subcategory, raw)) {
+      warnings.push(`Sub-category "${raw}" is not in config/taxonomy.json — using "${sub}".`);
     }
     if (!subcategories.includes(sub)) subcategories.push(sub);
   }
 
+  // ---- languages: FREE-FORM in task.toml. There is nothing here to validate against. -----------
+  //
+  // The template in the playbook is literally `languages = ["bash"]`. There is no closed
+  // vocabulary, so the only job of the table is to stop the SAME language appearing under two
+  // spellings (c++ / cpp). An unknown one is just a language we have not seen — "HCL" was, and it
+  // stopped a perfectly good task at the paste box.
   const languages: string[] = [];
-  for (const raw of parsed.languages.split(",").map((s) => s.trim()).filter(Boolean)) {
-    const lang = lookup(t.language, raw);
-    if (!lang) {
-      throw new TaxonomyError(
-        `Unknown language ${JSON.stringify(raw)}. Add it to config/taxonomy.json.`,
-      );
-    }
+  for (const raw of parsed.languages.split(/[,/\n]/).map((s) => s.trim()).filter(Boolean)) {
+    const lang = lookup(t.language, raw) ?? slugifyLanguage(raw);
     if (!languages.includes(lang)) languages.push(lang);
   }
 
-  return { category, subcategories, languages };
+  return { category, subcategories, languages, warnings };
 }

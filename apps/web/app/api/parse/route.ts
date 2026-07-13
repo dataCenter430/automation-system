@@ -20,9 +20,17 @@ export async function POST(req: Request) {
     const parsed = parseTaskBlob(blob);
     const slug = slugify(parsed.title);
 
-    // Resolve the closed vocabularies now, not at build time. An unknown label is a hard
-    // error here, where you're looking at it — rather than a blocking CI failure an hour
-    // into a build.
+    // Resolve the vocabularies now, not at build time — so anything worth saying is said while a
+    // human is looking at the preview, rather than an hour into a build.
+    //
+    // An UNKNOWN label is no longer an error. It is slugified, passed through, and reported as a
+    // WARNING: Snorkel adds languages and categories whenever it likes, and refusing a good task
+    // because our lookup table has not caught up is our bug, not the task's. ("HCL" and
+    // "Security & Cryptography" both did exactly that.)
+    //
+    // Exactly one thing still throws: a BLOCKED category. That is not vocabulary validation, it is
+    // the guard that caught two of our three rejections, and it belongs here — at the paste box,
+    // before anything is spent.
     let toml = null;
     let taxonomyError: string | null = null;
     try {
@@ -32,7 +40,13 @@ export async function POST(req: Request) {
       else throw e;
     }
 
-    return NextResponse.json({ parsed, slug, toml, taxonomyError });
+    return NextResponse.json({
+      parsed,
+      slug,
+      toml,
+      taxonomyError,
+      warnings: toml?.warnings ?? [],
+    });
   } catch (e) {
     if (e instanceof ParseError) {
       return NextResponse.json({ error: e.message }, { status: 422 });

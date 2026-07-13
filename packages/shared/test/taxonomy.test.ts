@@ -52,6 +52,10 @@ test("a BLOCKED label still refuses — and says WHY, not 'unknown category'", a
     ["Data Processing", "data-processing"],
     ["Software Engineering", "software-engineering"],
     ["Debugging", "debugging"],
+    // Not in the mapping table at all. Slugifying an unknown label makes the blocked guard
+    // STRONGER: it now catches spellings nobody remembered to map.
+    ["software-engineering", "software-engineering"],
+    ["Data  Processing", "data-processing"],
   ] as const) {
     assert.throws(
       () => toTaskToml({ category: label, sub_category: "", languages: "" }),
@@ -64,6 +68,29 @@ test("a BLOCKED label still refuses — and says WHY, not 'unknown category'", a
       label,
     );
   }
+});
+
+test("AN UNKNOWN LABEL IS NOT AN ERROR — Snorkel adds languages and categories whenever it likes", async () => {
+  const { toTaskToml } = await import("../src/taxonomy.ts");
+
+  // "HCL" was refused at the paste box by OUR lookup table. It is a perfectly good language, and
+  // task.toml's `languages` is FREE-FORM — the playbook's own template is just languages=["bash"].
+  // There was nothing to validate against. That refusal was our bug, not the task's.
+  const r = toTaskToml({ category: "Security", sub_category: "DB Interaction", languages: "HCL, Lua" });
+  assert.deepEqual(r.languages, ["hcl", "lua"]);
+  assert.equal(r.warnings.length, 0, "HCL is mapped now, so it should not even warn");
+
+  // Anything Snorkel invents tomorrow: slugified, passed through, WARNED about. Never fatal.
+  const novel = toTaskToml({
+    category: "Quantum Computing",
+    sub_category: "Threat Modelling",
+    languages: "Zorblang",
+  });
+  assert.equal(novel.category, "quantum-computing");
+  assert.deepEqual(novel.subcategories, ["threat_modelling"]);
+  assert.deepEqual(novel.languages, ["zorblang"]);
+  assert.equal(novel.warnings.length, 2, "the human should SEE what we guessed");
+  assert.match(novel.warnings.join("\n"), /Quantum Computing/);
 });
 
 test("$allowed holds task.toml ENUMS only — never a display label", async () => {

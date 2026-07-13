@@ -116,12 +116,36 @@ test("maps the blob's human labels onto task.toml enum values", () => {
   assert.deepEqual(t.languages, ["c", "sql", "bash"]);
 });
 
-test("an unknown label is a hard error, not a silent pass-through", () => {
-  // An invalid enum in task.toml fails Snorkel's CI, and we'd only find out a full
-  // build cycle later. Better to stop here, where a human is already looking.
+test("an unknown label passes THROUGH with a warning — it is not an error", () => {
+  // THIS TEST USED TO ASSERT THE OPPOSITE, and the old reasoning was: "an invalid enum in task.toml
+  // fails Snorkel's CI, so stop here, where a human is looking."
+  //
+  // That was wrong, and it cost two good tasks in one day. "Security & Cryptography" and "HCL" are
+  // both perfectly valid, and both were refused at the paste box by OUR lookup table — not by
+  // anything Snorkel requires. `languages` is FREE-FORM in task.toml; there was never anything to
+  // validate it against. Snorkel adds languages and categories whenever it likes, and a closed
+  // table on our side is a promise we cannot keep.
+  //
+  // So an unknown label is slugified, passed through, and WARNED about. If the guess is wrong,
+  // Snorkel's validate_task_fields says so — and that check is actually authoritative, unlike ours.
+  const r = toTaskToml({ category: "Underwater Basket Weaving", sub_category: "Long Context", languages: "C" });
+  assert.equal(r.category, "underwater-basket-weaving");
+  assert.deepEqual(r.subcategories, ["long_context"]);
+  assert.deepEqual(r.languages, ["c"]);
+  assert.equal(r.warnings.length, 1, "the human must SEE that we guessed");
+});
+
+test("...but a BLOCKED category is still refused, and that refusal is the point", () => {
+  // The one thing that still throws. Not vocabulary validation — this is the guard that caught two
+  // of our three rejections (software-engineering 0.95, data-processing 0.90), and it must fire at
+  // the paste box, before a 45-minute build is spent on a task Snorkel will reject outright.
   assert.throws(
-    () => toTaskToml({ category: "Underwater Basket Weaving", sub_category: "Long Context", languages: "C" }),
-    TaxonomyError,
+    () => toTaskToml({ category: "Software Engineering", sub_category: "Long Context", languages: "C" }),
+    (e: Error) => {
+      assert.ok(e instanceof TaxonomyError);
+      assert.match(e.message, /NOT currently accepting/);
+      return true;
+    },
   );
 });
 

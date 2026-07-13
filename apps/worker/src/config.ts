@@ -31,6 +31,8 @@ export interface Config {
     pollIntervalSec: number; maxParallelTasks: number;
     /** Open a VS Code window per task workspace, as a viewer (the SDK still drives). */
     openEditor: boolean;
+    /** How many VS Code windows may exist at once. A MEMORY limit — see the config comment. */
+    maxEditors?: number;
   };
   snorkel?: {
     /** Minutes offered for "How long did it take you to complete this submission?". */

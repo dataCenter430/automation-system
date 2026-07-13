@@ -15,6 +15,7 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["packages/**/*.ts", "apps/worker/**/*.ts", "scripts/**/*.ts"],
+  "include": [
+    "types/**/*","packages/**/*.ts", "apps/worker/**/*.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules", "workspace", "runs", "apps/web/.next"]
 }

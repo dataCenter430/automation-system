@@ -1,59 +1,81 @@
 /**
- * Open a VS Code window on a task workspace, so you can watch the build happen in a real
- * editor — one window per task, all of them at once.
+ * The worker's single VS Code window pool.
  *
- * This is NOT the old build path. VS Code is a VIEWER here, not the driver.
+ * ONE pool per worker process, because the cap is a property of the MACHINE, not of a task. Eight
+ * tasks each politely holding "their own" window is exactly how you end up with eight windows.
  *
- * The old system drove the Claude extension by synthesising keystrokes into the focused
- * window. That is why it could only ever run one build at a time (only one window can hold
- * keyboard focus), why it needed an unlocked desktop, and why it could not run on this
- * machine at all. It also meant the build ran under whatever permissions the extension
- * happened to have — there was no guard.ts fence, because there was no programmatic hook to
- * put one in.
- *
- * What makes the viewer approach work is a happy accident of where Claude Code keeps state:
- * the Agent SDK writes its session transcript to
- *
- *     ~/.claude/projects/<workspace path, non-alphanumerics as '-'>/<session-id>.jsonl
- *
- * which is the SAME store the VS Code Claude extension reads for that folder. So opening VS
- * Code on workspace/<slug> shows you the build's own conversation in the Claude panel's
- * history — the prompt we sent and everything Claude did — while the SDK, not the keyboard,
- * is what actually drives it. You get the window back without giving up concurrency, the
- * permission guard, or the ability to run headless.
- *
- * Fire-and-forget on purpose: a missing `code` binary must never fail a build. If VS Code
- * cannot open, you lose a window, not a task.
+ * The pool — and the argument for why it can never close a window YOU opened — lives in editor.ts.
+ * This file is just the wiring: read the config, hold the one instance, give the pipeline four
+ * verbs.
  */
-import { spawn } from "node:child_process";
+import { EditorPool } from "./editor.ts";
+import { loadConfig } from "../config.ts";
 
-const opened = new Set<string>();
+let pool: EditorPool | null = null;
+
+function cap(): number {
+  const cfg = loadConfig();
+  // openEditor:false means a cap of ZERO — the pool still exists, it just never opens anything.
+  // That keeps every call site identical on a headless box, instead of sprinkling `if (openEditor)`
+  // through the pipeline.
+  return cfg.worker.openEditor ? (cfg.worker.maxEditors ?? 6) : 0;
+}
+
+function get(): EditorPool {
+  if (!pool) {
+    pool = new EditorPool({ max: cap() });
+  }
+  return pool;
+}
 
 /**
- * @param workspace absolute path to the task workspace
- * @param onNote    optional progress sink, so the dashboard says whether it worked
+ * Open a window for this task, if the pool has room.
+ *
+ * Never throws, never blocks. An editor is a convenience and a build must never wait on one — so a
+ * full pool, a missing `code` binary, or no X11 all end the same way: no window, and the build
+ * carries on. The dashboard says which.
  */
-export function openInEditor(workspace: string, onNote?: (msg: string) => void): void {
-  // Once per workspace per worker run. `code <path>` re-focuses an existing window, and
-  // stealing focus every time a fix turn starts would make the machine unusable while eight
-  // builds run.
-  if (opened.has(workspace)) return;
-  opened.add(workspace);
-
+export async function openInEditor(workspace: string, onNote?: (msg: string) => void): Promise<void> {
   try {
-    const child = spawn("code", [workspace], {
-      detached: true,
-      stdio: "ignore",
-      // NOT windowsHide: on Windows, Electron inherits nCmdShow for its first window and
-      // would open VS Code invisibly — real, focusable, and impossible to see. That cost the
-      // original author an afternoon; the comment is preserved so it does not cost another.
-    });
-    child.on("error", (e) => {
-      onNote?.(`could not open VS Code (${e.message}) — the build continues without it`);
-    });
-    child.unref();
-    onNote?.("opened VS Code on this workspace — the Claude panel's history shows this session");
+    const p = get();
+    const opened = await p.open(workspace);
+    if (!opened) {
+      onNote?.(
+        cap() === 0
+          ? "editor windows are off (worker.openEditor) — watch this build in the console"
+          : `no VS Code window for this task — the pool is full at ${cap()}. ` +
+            `Watch it in the console; the build is unaffected.`,
+      );
+      return;
+    }
+    onNote?.(`opened VS Code (${p.size}/${cap()}) — the Claude panel shows this build's own session`);
   } catch (e) {
     onNote?.(`could not open VS Code (${(e as Error).message}) — the build continues without it`);
   }
+}
+
+/**
+ * This task is finished with its window. Close it.
+ *
+ * Deliberately NOT called on FAILED or NEEDS_HUMAN: those are exactly the tasks you want to open
+ * and look at. See pipeline.ts for which states release a window.
+ */
+export async function closeEditor(workspace: string, why: string): Promise<void> {
+  try {
+    await get().release(workspace, why);
+  } catch {
+    // A window we could not close is an orphan on screen. Annoying, never dangerous.
+  }
+}
+
+/** Keep this task's window off the eviction block while it is actively doing something. */
+export function touchEditor(workspace: string): void {
+  try {
+    get().touch(workspace);
+  } catch { /* the pool is best-effort, always */ }
+}
+
+/** For the dashboard's fleet meters — the third thing that can run out, after Claude and Docker. */
+export function editorLoad(): { open: number; max: number } {
+  return { open: pool?.size ?? 0, max: cap() };
 }

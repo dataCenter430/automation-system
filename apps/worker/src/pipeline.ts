@@ -21,6 +21,7 @@ import type { TerminusRow } from "../../../packages/shared/src/types.ts";
 import type { ParsedTask } from "../../../packages/shared/src/parse-task-blob.ts";
 import { readState, writeState, patchState, type LocalState } from "./state.ts";
 import { snap } from "./browser/actions.ts";
+import { closeEditor, touchEditor } from "./util/open-editor.ts";
 import { buildTask, fixTask, buildAlreadyComplete, BuildIncomplete } from "./stages/build.ts";
 import { verifyTask } from "./stages/verify.ts";
 import { zipTask, assertNoWrapperDir } from "./stages/zip.ts";
@@ -88,6 +89,19 @@ function runDirFor(cfg: Config, slug: string, label: string): string {
 }
 
 /** Commit a state transition to disk AND the DB, and log it. Order matters: disk first. */
+/**
+ * Pipeline states where the VS Code window has nothing left to show, so it is closed.
+ *
+ * The operator's rule: "close vs codes for finished work once submit or revise". So: pass 1 has
+ * landed (SUBMITTED — Snorkel now has it and is running CI), and pass 2 has landed
+ * (SENT_TO_REVIEWER — a human reviewer has it). Both are moments where the build is genuinely over.
+ *
+ * DELIBERATELY ABSENT: FAILED and NEEDS_HUMAN. Those are the two states where you most want an
+ * editor open on the task — it stopped and it wants you to look at it. Closing the window on a task
+ * that just failed would be taking away the thing you need.
+ */
+const EDITOR_DONE: readonly number[] = [S.SUBMITTED, S.SENT_TO_REVIEWER];
+
 async function transition(
   ctx: Ctx, row: TerminusRow, ws: string, to: number,
   ev: { stage: any; message?: string; detail?: Record<string, unknown> },
@@ -114,6 +128,15 @@ async function transition(
     message: ev.message ?? null,
   });
   ctx.log(`${row.slug ?? row.task_id}  ${stateName(from)} → ${stateName(to)}${ev.message ? `  · ${ev.message}` : ""}`);
+
+  // The window's job is done. Closing is best-effort and must never fail a transition — the state
+  // machine has already committed, and a stuck window is not worth unwinding it for.
+  if (EDITOR_DONE.includes(to)) {
+    void closeEditor(ws, `${stateName(to).toLowerCase().replace(/_/g, " ")} — the build is over`);
+  } else {
+    // Any other transition means this task is alive, so keep its window off the eviction block.
+    touchEditor(ws);
+  }
 }
 
 async function fail(ctx: Ctx, row: TerminusRow, ws: string, stage: any, err: string, needsHuman = false): Promise<void> {

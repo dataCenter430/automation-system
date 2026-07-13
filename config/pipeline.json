@@ -26,7 +26,9 @@
     "probeTimeoutMin": 30,
     "rateLimitBackoffSec": 120,
     "$classifierModel": "Snorkel's CI build log literally prints: export REVIEW_MODEL=\"claude-haiku-4-5\". So the gate asks the SAME model the SAME question before we upload. That is the difference between a gate that approximates Snorkel and one that agrees with it.",
-    "classifierModel": "claude-haiku-4-5"
+    "classifierModel": "claude-haiku-4-5",
+    "$askHumanTimeoutMin": "How long a build waits when it asks you a question (the ask_human tool -> the dashboard's Human panel). A parked question HOLDS ITS CLAUDE SLOT, so this is the blast radius of nobody being at the desk: at 6 slots and a 30-minute timeout, three unanswered questions cost you half the fleet for half an hour, and no longer. On timeout the tool does not error - it tells Claude to use its best judgment and to say in its final message what it decided alone.",
+    "askHumanTimeoutMin": 30
   },
   "docker": {
     "$comment": "Mirrors task.toml [environment]; --network none reproduces allow_internet=false at test time.",

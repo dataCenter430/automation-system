@@ -45,6 +45,17 @@ export function FleetMeters({ fleet }: { fleet: Fleet | null }) {
         down={down}
       />
 
+      {/* Sessions frozen on an unanswered question. They are inside `inUse` — they hold their
+          slots — so without this the meter reads "4/6 running" and looks healthy while four
+          builds sit doing precisely nothing, waiting for you. The one meter where the number
+          is a bill you are running up. */}
+      {!down && !!fleet?.claude?.blocked && (
+        <span className="pill" style={{ color: "var(--brand)" }} title="Claude sessions frozen inside an ask_human call, holding their build slots until you answer">
+          <span className="dot pulse" />
+          {fleet.claude.blocked} waiting on you
+        </span>
+      )}
+
       {down && (
         <span className="pill" style={{ color: "var(--bad)" }} title={why}>
           <span className="dot" />

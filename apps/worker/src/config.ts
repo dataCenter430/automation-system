@@ -13,6 +13,12 @@ export interface Config {
     model: string | null;
     /** The model the category classifier uses. Snorkel's CI announces REVIEW_MODEL="claude-haiku-4-5". */
     classifierModel: string;
+    /**
+     * How long a session waits on an `ask_human` question before proceeding on its own
+     * judgment. A parked question holds a Claude slot, so this bounds how much of the fleet an
+     * unattended dashboard can freeze.
+     */
+    askHumanTimeoutMin?: number;
   };
   docker: {
     cpus: number; memoryMb: number; buildTimeoutSec: number;

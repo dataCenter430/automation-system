@@ -51,15 +51,41 @@ export function Notify({ tasks }: { tasks: any[] }) {
     // On the first render after load, record what is ALREADY parked without alerting. A page
     // refresh should not re-fire a notification for something that has been sitting there
     // since yesterday.
+    //
+    // A live QUESTION is the exception: it is not "parked", it is a Claude session frozen
+    // right now, burning a build slot and a countdown. If one is open when you load the page,
+    // you should be told — even if it was asked before you got here.
     if (!primed.current) {
       for (const t of tasks) {
         if (WANTS_YOU[t.pipeline_state]) seen.current.add(`${t.task_id}:${t.pipeline_state}`);
       }
       primed.current = true;
-      return;
     }
 
     for (const t of tasks) {
+      // ---- A build stopped to ask you something. This outranks every state below. ----
+      //
+      // Keyed by the QUESTION id, not the task: one task can ask several questions over a
+      // two-hour build, and each is a fresh reason to interrupt you. requireInteraction is
+      // non-negotiable here — a question notification that fades away after four seconds is
+      // a build slot frozen for thirty minutes because you were making coffee.
+      if (t.question) {
+        const key = `q:${t.question.id}`;
+        if (!seen.current.has(key)) {
+          seen.current.add(key);
+          const n = new Notification("Claude is asking you", {
+            body: `${t.slug ?? t.task_id.slice(0, 8)} — ${t.question.question}`,
+            tag: key,
+            requireInteraction: true,
+          });
+          n.onclick = () => {
+            window.focus();
+            n.close();
+          };
+        }
+        continue;
+      }
+
       const rule = WANTS_YOU[t.pipeline_state];
       if (!rule) continue;
       const key = `${t.task_id}:${t.pipeline_state}`;

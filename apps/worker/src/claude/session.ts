@@ -29,9 +29,11 @@
  */
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { basename, join, resolve } from "node:path";
+import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
 import { RateLimited, looksRateLimited } from "./errors.ts";
+import { askHuman, blockedCount, clearQuestion } from "./ask.ts";
 import { judge } from "./guard.ts";
 import { Semaphore } from "../util/semaphore.ts";
 import { loadConfig } from "../config.ts";
@@ -53,9 +55,22 @@ const claudeSlots = new Semaphore(Math.max(1, loadConfig().claude.maxConcurrent)
  */
 const cfgModel: string | null = loadConfig().claude.model ?? null;
 
-/** For the worker's status line: how loaded is Claude right now? */
-export function claudeLoad(): { running: number; queued: number } {
-  return { running: claudeSlots.inUse, queued: claudeSlots.queued };
+/**
+ * How long a session will wait for a human to answer a question before giving up and using
+ * its own judgment. See ask.ts — a parked question holds a Claude slot, so this is the knob
+ * that decides whether "nobody is at the desk" costs you one build or the whole fleet.
+ */
+const askTimeoutMin: number = loadConfig().claude.askHumanTimeoutMin ?? 30;
+
+/**
+ * For the worker's status line: how loaded is Claude right now?
+ *
+ * `blocked` is the number of sessions parked on an unanswered question. It is part of
+ * `running` (they hold their slots), and it is reported separately because a fleet whose
+ * slots are all waiting on a human looks, from every other meter, exactly like an idle one.
+ */
+export function claudeLoad(): { running: number; queued: number; blocked: number } {
+  return { running: claudeSlots.inUse, queued: claudeSlots.queued, blocked: blockedCount() };
 }
 
 /**
@@ -96,6 +111,17 @@ export interface TurnResult {
   durationSec: number;
   /** Tool calls the guard refused. Empty on a normal build; non-empty is worth reading. */
   denials: string[];
+  /** How many times this turn stopped and asked you something. */
+  questionsAsked: number;
+  /**
+   * ...and how many of those you never answered.
+   *
+   * A timed-out question is not a neutral event: the build carried on by guessing. That is the
+   * right trade (see ask.ts) but it is a fact the task's record should carry, because "this
+   * task made an unsupervised design decision" is exactly the kind of thing you want to know
+   * before you put your name on it at Snorkel.
+   */
+  questionsTimedOut: number;
   /**
    * The model that ACTUALLY ran this turn, as reported by the SDK — not the one we asked
    * for. Before this existed, nobody knew: the first real build ran on
@@ -156,6 +182,10 @@ function describeToolUse(b: any): string {
     case "Glob":
     case "Grep":
       return `${b.name} ${String(i.pattern ?? "").slice(0, 50)}`;
+    // The raw name is `mcp__human__ask_human`, which tells the reader of the log nothing. The
+    // QUESTION is the event.
+    case "mcp__human__ask_human":
+      return `❓ asked you: ${String(i.question ?? "").slice(0, 90)}`;
     default:
       return b.name;
   }
@@ -198,6 +228,8 @@ async function runTurnInner(args: RunTurnArgs): Promise<TurnResult> {
   let sessionId: string | null = resumeId;
   let announced = false;
   let toolCalls = 0;
+  let questionsAsked = 0;
+  let timedOutQuestions = 0;
   let lastActivity = Date.now();
   let finalText = "";
   let stderrTail = "";
@@ -227,6 +259,64 @@ async function runTurnInner(args: RunTurnArgs): Promise<TurnResult> {
       });
   }, heartbeatMs);
 
+  // A question left over from a previous run belongs to a session that no longer exists.
+  // Answering it would do nothing, so it must never reach a human. See ask.ts.
+  clearQuestion(args.cwd);
+
+  /**
+   * The one tool in this system that a human answers.
+   *
+   * Claude Code's built-in AskUserQuestion is removed from the model's context below
+   * (`disallowedTools`), because headless it has nobody to ask and would either hang or be
+   * silently dropped. This replaces it. The handler is awaited by the SDK, so it can park for
+   * as long as a human takes; the answer comes back as an ordinary tool result and the
+   * conversation continues with its full context intact.
+   */
+  const humanTools = createSdkMcpServer({
+    name: "human",
+    version: "1.0.0",
+    tools: [
+      tool(
+        "ask_human",
+        "Ask the human operator a question and WAIT for their answer. Use this only for a " +
+          "decision that changes what the task IS and that you cannot settle from the brief " +
+          "or the playbook. Do not use it to ask permission to proceed, to confirm something " +
+          "you already know, or to report progress.",
+        {
+          question: z.string().describe("The decision, in one sentence. Be specific."),
+          context: z
+            .string()
+            .optional()
+            .describe("Why you are stuck: what you tried, and what makes the choice genuinely ambiguous."),
+          options: z
+            .array(
+              z.object({
+                label: z.string().describe("A concrete choice, e.g. 'Calibrate a threshold'."),
+                detail: z.string().optional().describe("What picking this would mean for the task."),
+              }),
+            )
+            .default([])
+            .describe("The choices you see. The human may also type a different answer."),
+        },
+        async (input) => {
+          const a = await askHuman({
+            workspace: args.cwd,
+            slug: basename(args.cwd),
+            question: input.question,
+            context: input.context,
+            options: input.options ?? [],
+            timeoutMin: askTimeoutMin,
+            signal: abort.signal,
+            onProgress: args.onProgress,
+          });
+          questionsAsked += 1;
+          if (a.by === "timeout") timedOutQuestions += 1;
+          return { content: [{ type: "text" as const, text: a.answer }] };
+        },
+      ),
+    ],
+  });
+
   try {
     const stream = query({
       prompt: args.prompt,
@@ -235,6 +325,19 @@ async function runTurnInner(args: RunTurnArgs): Promise<TurnResult> {
         abortController: abort,
         // Isolation mode: no filesystem settings, no CLAUDE.md. See the header.
         settingSources: [],
+        // The human-in-the-loop channel. `ask_human` blocks; the dashboard answers it.
+        mcpServers: { human: humanTools },
+        // Close the dead end. Headless, the built-in has nobody to ask — leaving it in context
+        // means the model can pick the door that goes nowhere instead of the one that works.
+        disallowedTools: ["AskUserQuestion"],
+        // The SDK's own warning, from the createSdkMcpServer doc comment: "If your SDK MCP
+        // calls will run longer than 60s, override CLAUDE_CODE_STREAM_CLOSE_TIMEOUT." A tool
+        // that waits for a person WILL run longer than 60 seconds. Without this the transport
+        // tears the session down mid-question and the whole feature is a hang.
+        env: {
+          ...process.env,
+          CLAUDE_CODE_STREAM_CLOSE_TIMEOUT: String(askTimeoutMin * 60_000 + 120_000),
+        },
         // There is no human at the keyboard, so every tool call is decided by guard.ts:
         // writes must stay inside this workspace, and a short list of shell constructs a
         // task build never needs is refused. NOT 'bypassPermissions' — an unattended agent
@@ -305,6 +408,8 @@ async function runTurnInner(args: RunTurnArgs): Promise<TurnResult> {
             durationSec: Math.floor((Date.now() - started) / 1000),
             denials,
             model,
+            questionsAsked,
+            questionsTimedOut: timedOutQuestions,
           };
         }
 
@@ -340,5 +445,9 @@ async function runTurnInner(args: RunTurnArgs): Promise<TurnResult> {
   } finally {
     clearTimeout(timer);
     clearInterval(beat);
+    // However this turn ended — success, timeout, a dead CLI — no session is listening for an
+    // answer any more. Leaving the question on the dashboard would invite the human to answer
+    // into the void, and the click would appear to do nothing.
+    clearQuestion(args.cwd);
   }
 }

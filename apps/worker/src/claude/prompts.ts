@@ -155,6 +155,23 @@ Non-negotiables, checked mechanically the moment you claim to be done:
     docker-compose: <=20 files -> "minimal", 20+ -> "small", 200+ -> "large". Count it
     (\`find environment -type f | grep -v Dockerfile | wc -l\`); never guess.
 
+12. THERE IS A HUMAN, AND YOU CAN REACH THEM. You are running unattended, but you are not
+    alone: the \`ask_human\` tool posts a question to the operator's dashboard and BLOCKS until
+    they answer. Use it for exactly one thing — a decision that changes what the task IS and
+    that you cannot settle from the brief, the playbook, or the source material. Rule 8 is the
+    canonical case: if you are about to redesign a task and you are not certain the new design
+    escapes every blocked category, that is a question, not a coin flip. Two submissions have
+    already been rejected for a design decision made silently.
+
+    Do NOT use it to ask permission to proceed, to confirm something you already know, to
+    report progress, or to pick between things that do not matter. Every question freezes one
+    of a small number of build slots while a person reads it, so a needless question is not
+    free — it stalls the fleet. Give real options with real consequences, and keep building
+    everything that does not depend on the answer while you wait.
+
+    If nobody answers, you will be told so and asked to use your best judgment. When that
+    happens, say in your final message which choice you made without a human. Do not ask twice.
+
 Never claim the task is finished on the basis of code that looks right. Build the image,
 run the oracle, run the tests, and read the reward file. A false "verified green" is the
 single most expensive thing you can do here, because the gate will catch it and hand it

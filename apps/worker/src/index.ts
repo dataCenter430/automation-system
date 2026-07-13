@@ -63,7 +63,16 @@ function writeStatus(): void {
   const status = {
     pid: process.pid,
     at: new Date().toISOString(),
-    claude: { inUse: claude.running, queued: claude.queued, max: cfg.claude.maxConcurrent },
+    // `blocked` is a SUBSET of inUse: sessions frozen inside an ask_human tool call, holding
+    // their slot while they wait for a person. Reported separately because a fleet whose six
+    // slots are all parked on unanswered questions is indistinguishable, on every other meter,
+    // from a fleet that is simply busy — and the fix for the two is not the same.
+    claude: {
+      inUse: claude.running,
+      queued: claude.queued,
+      max: cfg.claude.maxConcurrent,
+      blocked: claude.blocked,
+    },
     gates: { inUse: gates.inUse, queued: gates.queued, max: cfg.docker.maxConcurrentGates },
     tasksInFlight: inFlight.size,
     maxParallel: cfg.worker.maxParallelTasks,

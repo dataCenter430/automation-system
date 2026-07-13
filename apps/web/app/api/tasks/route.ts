@@ -7,6 +7,7 @@ import { PipelineState, TaskStatus } from "../../../../../packages/shared/src/st
 import { REPO_ROOT, expandPath } from "../../../../../packages/shared/src/paths.ts";
 import { assertValidSlug } from "../../../../../packages/shared/src/slug.ts";
 import { toTaskToml } from "../../../../../packages/shared/src/taxonomy.ts";
+import { readQuestion } from "../../../../worker/src/claude/ask.ts";
 
 export const runtime = "nodejs"; // reads config/owners.json off disk
 
@@ -292,6 +293,12 @@ export async function GET() {
       costUsd: b?.costUsd ?? null,
       costPartial: b?.costPartial ?? false,
       tokens: b?.tokens ?? null,
+      // A build that stopped to ask you something. It is BLOCKED — the Claude session is
+      // parked inside the ask_human tool call, holding its slot, until this is answered or it
+      // times out. Carried on the task row rather than fetched per-task so the poll the
+      // dashboard already makes is the poll that finds it: a question nobody sees for three
+      // seconds longer than necessary is a build stalled for three seconds longer.
+      question: t.slug ? readQuestion(join(ws, t.slug)) : null,
     };
   });
 

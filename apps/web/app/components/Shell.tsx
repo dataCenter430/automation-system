@@ -48,6 +48,27 @@ export interface Task {
   toolCalls: number | null;
   costUsd: number | null;
   costPartial: boolean;
+
+  /**
+   * The build stopped mid-turn to ask you something, and is BLOCKED until you answer.
+   *
+   * This is not a pipeline state — the task is still BUILD_RUNNING, and its Claude session is
+   * alive, holding its slot, parked inside the ask_human tool call. That is why it lives on
+   * the row rather than in the state machine: nothing transitioned, something is waiting.
+   */
+  question: PendingQuestion | null;
+}
+
+/** A question a Claude session is blocked on. Written by the worker; see worker/claude/ask.ts. */
+export interface PendingQuestion {
+  id: string;
+  slug: string;
+  askedAt: string;
+  /** The build gives up and decides for itself at this moment. Shown as a countdown. */
+  expiresAt: string;
+  question: string;
+  context?: string;
+  options: Array<{ label: string; detail?: string }>;
 }
 
 export interface EventRow {
@@ -64,7 +85,8 @@ export interface EventRow {
 export interface Fleet {
   pid: number | null;
   at: string | null;
-  claude: { inUse: number; queued: number; max: number } | null;
+  /** `blocked` = sessions parked on an unanswered question. They HOLD their slots. */
+  claude: { inUse: number; queued: number; max: number; blocked?: number } | null;
   gates: { inUse: number; queued: number; max: number } | null;
   tasksInFlight: number | null;
   maxParallel: number | null;

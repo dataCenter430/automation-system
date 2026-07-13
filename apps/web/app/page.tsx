@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import { AwaitingHuman } from "./components/AwaitingHuman";
 import { GateVerdict } from "./components/GateVerdict";
+import { QuestionCard } from "./components/QuestionCard";
 import { TaskTable } from "./components/TaskTable";
 import { SessionView } from "./components/SessionView";
 import {
@@ -74,6 +75,16 @@ export default function Dashboard() {
         />
 
         <div className="main" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {/* Above everything, including the table. A question is a live Claude session frozen
+              mid-turn holding a build slot — it is the only thing on this page where YOUR
+              silence is actively costing something. It gets the top of the column, and it does
+              not go in the narrow rail, because it needs room to be read and answered. */}
+          {tasks
+            .filter((t) => t.question)
+            .map((t) => (
+              <QuestionCard key={t.question!.id} task={t} q={t.question!} onAnswered={refresh} />
+            ))}
+
           <TaskTable tasks={tasks} selected={selected} onSelect={setSelected} onAct={act} busy={busy} />
           {sel && <Detail t={sel} events={events} />}
         </div>

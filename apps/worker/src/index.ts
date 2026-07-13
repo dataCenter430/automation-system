@@ -14,7 +14,7 @@
 import "dotenv/config";
 import { loadConfig } from "./config.ts";
 import { preflight, report } from "./preflight.ts";
-import { advance, type Ctx } from "./pipeline.ts";
+import { advance, gateLoad, type Ctx } from "./pipeline.ts";
 import {
   claimNextTask, findInterrupted, getTask,
 } from "../../../packages/shared/src/supabase.ts";
@@ -22,7 +22,8 @@ import {
   CRASHED_MIDFLIGHT, PipelineState as S, stateName, isTerminal,
 } from "../../../packages/shared/src/status.ts";
 import { RateLimited } from "./claude/errors.ts";
-import { sessionExists } from "./claude/session.ts";
+import { claudeLoad, sessionExists } from "./claude/session.ts";
+import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { acquire, release, AlreadyRunning } from "./lock.ts";
 import type { TerminusRow } from "../../../packages/shared/src/types.ts";
@@ -36,6 +37,46 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** Tasks this process is currently stepping, so we never double-drive one. */
 const inFlight = new Set<string>();
 let stopping = false;
+
+/**
+ * The fleet meters.
+ *
+ * The worker is the only process that knows its own load: the Claude semaphore and the
+ * docker-gate semaphore live in THIS process's memory, and the web app cannot see inside
+ * it. So the worker writes what it knows to runs/.worker-status.json every tick and
+ * GET /api/fleet reads it back.
+ *
+ * Written tmp+rename, for the same reason state.json is: the dashboard polls this file on
+ * a 3s timer, and a half-written JSON would be read as a crashed worker.
+ *
+ * `at` is the liveness signal. It is refreshed on EVERY tick — including while rate-limit
+ * backoff is parked — because a worker that is waiting out a 429 is alive, and letting its
+ * status go stale would tell the dashboard it had died. Conversely, nothing here ever
+ * deletes the file: a killed worker leaves its last status behind and /api/fleet marks it
+ * stale from the timestamp. A dead worker must not read as an idle one.
+ */
+const STATUS_FILE = resolve(cfg.paths.runs, ".worker-status.json");
+
+function writeStatus(): void {
+  const claude = claudeLoad();
+  const gates = gateLoad();
+  const status = {
+    pid: process.pid,
+    at: new Date().toISOString(),
+    claude: { inUse: claude.running, queued: claude.queued, max: cfg.claude.maxConcurrent },
+    gates: { inUse: gates.inUse, queued: gates.queued, max: cfg.docker.maxConcurrentGates },
+    tasksInFlight: inFlight.size,
+    maxParallel: cfg.worker.maxParallelTasks,
+  };
+  try {
+    mkdirSync(cfg.paths.runs, { recursive: true });
+    const tmp = `${STATUS_FILE}.tmp`;
+    writeFileSync(tmp, JSON.stringify(status, null, 2), "utf8");
+    renameSync(tmp, STATUS_FILE);
+  } catch {
+    // These are diagnostics. A full disk must never take the pipeline down with it.
+  }
+}
 
 /** Rate limits are a subscription reality, not a bug. Back off; never burn a retry. */
 let backoffUntil = 0;
@@ -112,8 +153,14 @@ async function main(): Promise<void> {
   ctx.log(`polling every ${cfg.worker.pollIntervalSec}s · max ${cfg.worker.maxParallelTasks} tasks in flight`);
   ctx.log(`DRAFT tasks are inert — click "Start Build" in the dashboard to queue one.`);
 
+  writeStatus(); // publish an idle-but-alive status before the first poll
+
   while (!stopping) {
+    writeStatus();
+
     if (Date.now() < backoffUntil) {
+      // Still alive, just parked. writeStatus() above already refreshed `at`, so the
+      // dashboard shows a backed-off worker rather than a dead one.
       await sleep(2000);
       continue;
     }

@@ -1,78 +1,180 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { AddTask } from "./components/AddTask";
-import { Queue } from "./components/Queue";
-import { Notify } from "./components/Notify";
+import { useCallback, useState } from "react";
+import { AwaitingHuman } from "./components/AwaitingHuman";
+import { GateVerdict } from "./components/GateVerdict";
+import { TaskTable } from "./components/TaskTable";
+import { SessionView } from "./components/SessionView";
+import {
+  CLAUDE_LIVE, TASK_STATUS, stateMeta, useFleetData, type EventRow, type Task,
+} from "./components/Shell";
 
-export default function Page() {
-  const [data, setData] = useState<{ tasks: any[]; events: any[] }>({ tasks: [], events: [] });
-  const [err, setErr] = useState<string | null>(null);
-  const [owner, setOwner] = useState<string | null>(null);
+/**
+ * The dashboard. Three regions, one question each:
+ *
+ *   LEFT   is anything waiting on me?          (AwaitingHuman)
+ *   CENTRE what is the fleet doing?            (TaskTable, and the transcript of the selected row)
+ *   RIGHT  why did that gate go red?           (GateVerdict)
+ *
+ * Tasks and fleet load are polled once, in the Shell, every 3s and handed down — the poller
+ * is not duplicated here.
+ */
+export default function Dashboard() {
+  const { tasks, events, error, refresh } = useFleetData();
+  const [selected, setSelected] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      const r = await fetch("/api/tasks", { cache: "no-store" });
-      const j = await r.json();
-      if (j.error) setErr(j.error);
-      else { setData(j); setErr(null); }
-    } catch (e) {
-      setErr((e as Error).message);
-    }
-  }, []);
+  /**
+   * The three human transitions. Every one is guarded server-side by the state it expects,
+   * so a stale tab clicking twice cannot do anything unexpected — a 409 comes back and says
+   * the task moved while you were looking at it.
+   */
+  const act = useCallback(
+    async (taskId: string, action: "start" | "approve" | "retry") => {
+      setBusy(taskId);
+      try {
+        const r = await fetch(`/api/tasks/${taskId}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action }),
+        });
+        if (!r.ok) alert((await r.json()).error);
+      } catch (e) {
+        alert((e as Error).message);
+      } finally {
+        setBusy(null);
+        refresh();
+      }
+    },
+    [refresh],
+  );
 
-  useEffect(() => {
-    void refresh();
-    const t = setInterval(refresh, 3000);
-    return () => clearInterval(t);
-  }, [refresh]);
-
-  // Show whose name new tasks will be filed under. Submitting a batch under the wrong owner
-  // is annoying to undo, so it belongs on screen rather than buried in a settings page.
-  useEffect(() => {
-    fetch("/api/settings")
-      .then((r) => r.json())
-      .then((j) => setOwner(j?.activeOwner ?? null))
-      .catch(() => {});
-  }, []);
+  const sel = tasks.find((t) => t.task_id === selected) ?? null;
 
   return (
-    <main style={{ maxWidth: 1100, margin: "0 auto", padding: "32px 24px 80px" }}>
-      <header style={{ marginBottom: 28, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600 }}>Snorkel Automation Workflow</h1>
-          <p style={{ margin: "6px 0 0", color: "var(--dim)" }}>
-            Terminus task queue. Adding a task does not start it — you decide when.
-          </p>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-          {/* With eight two-hour builds running, you will not be watching the tab at the
-              moment one parks and asks for you. */}
-          <Notify tasks={data.tasks} />
-          <a
-            href="/settings"
-            style={{
-              color: "var(--dim)", textDecoration: "none", fontSize: 13,
-              border: "1px solid var(--line)", borderRadius: 6, padding: "6px 12px",
-              whiteSpace: "nowrap",
-            }}
-          >
-            Settings{owner ? ` · ${owner}` : ""}
-          </a>
-        </div>
-      </header>
-
-      {err && (
-        <div style={{
-          background: "#2a1a1f", border: "1px solid var(--bad)", color: "var(--bad)",
-          padding: "10px 12px", borderRadius: 8, marginBottom: 20,
-        }}>
-          {err}
+    <>
+      {error && (
+        <div
+          style={{
+            background: "rgba(244, 63, 94, 0.08)", border: "1px solid var(--bad)", color: "var(--bad)",
+            padding: "10px 12px", borderRadius: 8, marginBottom: 14, fontSize: 13,
+          }}
+        >
+          {error}
         </div>
       )}
 
-      <AddTask onAdded={refresh} />
-      <Queue tasks={data.tasks} events={data.events} onChanged={refresh} />
-    </main>
+      <div className="grid">
+        <AwaitingHuman
+          tasks={tasks}
+          onAct={act}
+          busy={busy}
+          selected={selected}
+          onSelect={(id) => setSelected(id)}
+        />
+
+        <div className="main" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <TaskTable tasks={tasks} selected={selected} onSelect={setSelected} onAct={act} busy={busy} />
+          {sel && <Detail t={sel} events={events} />}
+        </div>
+
+        <GateVerdict taskId={selected} />
+      </div>
+    </>
+  );
+}
+
+/**
+ * The selected task, in full: what it is, what went wrong (verbatim), what happened (the
+ * event log), and what Claude actually did (the transcript).
+ */
+function Detail({ t, events }: { t: Task; events: EventRow[] }) {
+  const meta = stateMeta(t.pipeline_state);
+  const failed = t.pipeline_state === -1 || t.pipeline_state === -2;
+  const mine = events.filter((e) => e.task_id === t.task_id).slice(0, 12);
+
+  const bits: string[] = [`snorkel: ${TASK_STATUS[t.task_status] ?? t.task_status}`];
+  if (t.claude_session_id) bits.push(`session ${t.claude_session_id.slice(0, 8)}`);
+  if (t.zip_path) bits.push(`zip ${t.zip_path.split(/[\\/]/).pop()}`);
+  if (t.assignment_id) bits.push(`assignment ${t.assignment_id.slice(0, 8)}`);
+
+  return (
+    <section
+      style={{
+        background: "var(--panel)", border: "1px solid var(--line)",
+        borderLeft: `3px solid ${meta.color}`, borderRadius: 10, padding: 14,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+        <span className="mono" style={{ fontSize: 13 }}>
+          {t.slug ?? t.task_id.slice(0, 8)}
+        </span>
+        <span className="pill" style={{ color: meta.color }}>
+          <span className={meta.live ? "dot pulse" : "dot"} />
+          {meta.name}
+        </span>
+        <span style={{ fontSize: 12, color: "var(--dim)" }}>{meta.hint}</span>
+      </div>
+
+      <div style={{ fontSize: 12.5, color: "var(--dim)", marginTop: 5 }}>{t.title}</div>
+      <div className="mono" style={{ fontSize: 10.5, color: "var(--dim)", marginTop: 5 }}>
+        {bits.join("  ·  ")}
+      </div>
+
+      {/* last_error, exactly as the pipeline wrote it. Not summarised, not truncated — the
+          stack trace or the CDP error IS the debugging information. */}
+      {failed && t.last_error && (
+        <pre
+          className="mono"
+          style={{
+            marginTop: 11, padding: "9px 11px",
+            background: "rgba(244, 63, 94, 0.07)", border: "1px solid var(--bad)",
+            borderRadius: 6, color: "var(--bad)", fontSize: 11,
+            whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 220, overflow: "auto",
+          }}
+        >
+          {t.last_error}
+        </pre>
+      )}
+
+      {/* The Log: the event stream, per task. */}
+      <div style={{ marginTop: 13, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
+        <div className="hdr" style={{ marginBottom: 7 }}>Log</div>
+        {mine.length === 0 ? (
+          <div style={{ fontSize: 12, color: "var(--dim)" }}>No events yet.</div>
+        ) : (
+          <div style={{ maxHeight: 160, overflow: "auto" }}>
+            {mine.map((e) => (
+              <div key={e.id} className="mono" style={{ display: "flex", gap: 9, fontSize: 11, padding: "2px 0" }}>
+                <span className="num" style={{ color: "var(--dim)", minWidth: 58, flexShrink: 0 }}>
+                  {new Date(e.created_at).toLocaleTimeString([], {
+                    hour: "2-digit", minute: "2-digit", second: "2-digit",
+                  })}
+                </span>
+                <span style={{ color: "var(--dim)", minWidth: 66, flexShrink: 0 }}>{e.stage}</span>
+                <span
+                  style={{
+                    color:
+                      e.status === "failed" ? "var(--bad)"
+                      : e.status === "completed" ? "var(--ok)"
+                      : "var(--dim)",
+                    minWidth: 0, wordBreak: "break-word",
+                  }}
+                >
+                  {e.message ?? e.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* The transcript. SessionView already renders the prompt, every tool call and its
+          result, the cost and the model badge — and it polls only while the build is live. */}
+      <div style={{ marginTop: 13, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
+        <div className="hdr" style={{ marginBottom: 7 }}>Session</div>
+        <SessionView taskId={t.task_id} live={CLAUDE_LIVE.has(t.pipeline_state)} />
+      </div>
+    </section>
   );
 }

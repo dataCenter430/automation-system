@@ -85,8 +85,19 @@ Non-negotiables, checked mechanically the moment you claim to be done:
 
    GATE, before you write a line of instruction.md. Complete in <=15 words:
      "The agent must produce ___, judged correct by ___."
-   If that reads "a corrected source file" / "the previously-wrong behaviour is now right",
-   you have designed a debugging task. STOP and redesign the substance.
+   Three ways that sentence gets you rejected. TWO OF THEM WE HAVE ALREADY SHIPPED AND HAD
+   REJECTED, so they are not hypothetical:
+     - "a corrected source file" / "the code now behaves correctly"
+         -> software-engineering, or debugging if the agent must FIND the fault. REJECTED (0.95).
+     - "a migrated / rematerialized dataset, table or feature store" / "the output data matches
+       the new spec"
+         -> data-processing. ETL is ETL however much machine-learning vocabulary surrounds it.
+            REJECTED (0.90) — this was our second attempt, and we walked into it while escaping
+            the first.
+     - anything whose grading sentence ends "...the output is correct" rather than naming a
+       MODEL quantity.
+   If your sentence reads like any of those, STOP and redesign the substance. Do not adjust the
+   wording; the classifier is not reading for wording.
 
    BANNED — never in instruction.md, the title, shipped source comments, solve.sh or test names:
    - "there are N bugs/defects", "fix the broken X", "X produces wrong/incorrect output",
@@ -100,12 +111,29 @@ Non-negotiables, checked mechanically the moment you claim to be done:
    REQUIRED INSTEAD. Nothing in the environment is ever *in error*. Pre-existing values are
    legitimately correct for a prior version or configuration (a v2 spec, an old calibration);
    the agent DERIVES the current definition from the shipped specification and BUILDS the current
-   artifact. Success is stated in the assigned category's own terms — for machine-learning:
-   features, cohorts, class balance, drift/PSI, calibration, thresholds, lineage, reproducibility;
-   never "the code is now correct". Domain nouns in the environment (a "classifier", a "feature
-   store") are set dressing: the classifier reads the agent's DELIVERABLE and the GRADING
-   criteria. Implementation language is irrelevant — 600 lines of C++ that build a feature
-   pipeline is machine-learning in C++; six seds over constants is debugging in any domain.
+   artifact.
+
+   For \`machine-learning\` specifically — and read this twice, because a plausible-sounding
+   near-miss is what cost us the second submission:
+
+     BUILDING A FEATURE PIPELINE IS NOT MACHINE LEARNING. It is data-processing, and
+     data-processing is BLOCKED. Materializing a feature store, computing features to a spec,
+     migrating a table between schema versions, even computing drift/PSI over two datasets —
+     every one of those is graded on WHETHER THE OUTPUT DATA IS CORRECT, and that is ETL.
+
+     Machine-learning means the deliverable and the GRADING are about MODEL BEHAVIOUR:
+       - train or fit a model, and be graded on its quality
+       - EVALUATE a model: precision, recall, PR-AUC, a confusion matrix, per-stratum metrics
+       - CALIBRATE: pick an operating threshold that hits a stated target (e.g. maximise
+         precision subject to recall >= 0.95), graded on the threshold and the metric it achieves
+       - select an operating point, measure calibration error, compare models
+     The test names are the tell. \`test_output_table_matches_spec\` is data-processing.
+     \`test_threshold_achieves_recall_0_95\` / \`test_pr_auc_above_baseline\` is machine-learning.
+
+   Domain nouns in the environment (a "classifier", a "feature store", a "model registry") are
+   SET DRESSING. The classifier reads the agent's DELIVERABLE and the GRADING criteria, and it
+   is not fooled by vocabulary — ours was, and that is exactly why this paragraph exists.
+   Implementation language is irrelevant: six seds over constants is debugging in any domain.
    \`long_context\` payload must be a specification the agent implements, never a hiding place
    for a bug, and never shortcut-able by comments in the shipped source.
 

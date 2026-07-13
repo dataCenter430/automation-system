@@ -53,6 +53,17 @@ function dockerGate(cfg: Config): Semaphore {
   return gateSlots;
 }
 
+/**
+ * For the worker's status line: how loaded is the docker gate right now?
+ *
+ * The semaphore is created lazily on the first gate, so "no gate has ever run" reports
+ * an idle gate rather than throwing — which is the truth, not a fudge.
+ */
+export function gateLoad(): { inUse: number; queued: number } {
+  if (!gateSlots) return { inUse: 0, queued: 0 };
+  return { inUse: gateSlots.inUse, queued: gateSlots.queued };
+}
+
 const toParsed = (r: TerminusRow): ParsedTask => ({
   category: r.category,
   sub_category: r.sub_category,

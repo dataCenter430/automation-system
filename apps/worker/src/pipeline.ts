@@ -26,7 +26,8 @@ import { verifyTask } from "./stages/verify.ts";
 import { zipTask, assertNoWrapperDir } from "./stages/zip.ts";
 import { generateExplanations } from "./stages/explain-generate.ts";
 import { openNewSubmission, fillSubmissionForm, AttestationRefused, FormNotReady } from "./stages/upload.ts";
-import { findInReviseQueue, readReviseInput, writeRubric } from "./stages/revise.ts";
+import { findInReviseQueue, readReviseInput, writeRubric, RubricRejected } from "./stages/revise.ts";
+import { formatRubricReport, lintRubric } from "./stages/rubric-lint.ts";
 import { checkFeedback, FeedbackInconclusive } from "./stages/feedback.ts";
 import { findSubmitted, clickSubmit, finaliseForm, pickAht } from "./stages/submit.ts";
 import { readQueue, QUEUE_LIMIT } from "./stages/queue-gate.ts";
@@ -469,7 +470,7 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
                 `re-submitting with the AI's untouched rubric would waste the round trip.`,
             );
           }
-          await writeRubric(page, readFileSync(rubricPath, "utf8"), runDir);
+          await writeRubric(page, readFileSync(rubricPath, "utf8"), runDir, ws);
         }
 
         // Remember WHERE the filled form is. The feedback and submit stages have to come
@@ -840,6 +841,49 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
             await emitEvent({ task_id: row.task_id, stage: "revise", status: "heartbeat", message: m });
           },
         });
+
+        // ---- The rubric must be LEGAL before we go anywhere near the browser ------------------
+        //
+        // Snorkel marks every rubric rule "High" severity: one failure and the task is not
+        // accepted. The rules are mechanical, so they are checked here rather than hoped for —
+        // and checked NOW, while the Claude session is still warm and can fix its own output,
+        // rather than at upload time when the only remaining move is to park the task.
+        //
+        // One retry. If Claude cannot produce a legal rubric with the errors in front of it, the
+        // problem is not a typo and a human should look.
+        const rubricPath = join(ws, ".pipeline", "rubric.md");
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          if (!existsSync(rubricPath)) {
+            throw new FormNotReady(
+              `The revise turn did not write ${rubricPath}. The rubric is what the reviewer grades ` +
+                `against and is the thing they most often send tasks back for.`,
+            );
+          }
+          const report = lintRubric(readFileSync(rubricPath, "utf8"), ws);
+          if (report.ok) {
+            await emitEvent({
+              task_id: row.task_id, stage: "revise", status: "heartbeat",
+              message: `rubric OK — ${report.criteria.length} criteria, ${report.negatives} negative`,
+            });
+            break;
+          }
+          if (attempt === 1) throw new RubricRejected(formatRubricReport(report));
+
+          await emitEvent({
+            task_id: row.task_id, stage: "revise", status: "heartbeat",
+            message: `rubric breaks ${report.findings.filter((f) => f.severity === "blocking").length} of Snorkel's rules — handing them back to Claude`,
+          });
+          await fixTask({
+            workspace: ws,
+            sessionId: readState(ws)!.claudeSessionId,
+            template: "07-rubric-fix.md",
+            vars: { report: formatRubricReport(report), workspace: ws },
+            timeoutMin: cfg.claude.explainTimeoutMin,
+            onProgress: async (m) => {
+              await emitEvent({ task_id: row.task_id, stage: "revise", status: "heartbeat", message: m });
+            },
+          });
+        }
 
         // The revision CHANGED THE TASK. The gate that blessed the old tree says nothing about
         // the new one, and the explanations describe a task that no longer exists.

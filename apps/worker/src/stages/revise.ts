@@ -43,6 +43,7 @@ import {
   readFieldMonaco, snap, writeFieldMonaco,
 } from "../browser/actions.ts";
 import { withScratchPage, type Attached } from "../browser/cdp.ts";
+import { formatRubricReport, lintRubric } from "./rubric-lint.ts";
 
 /** Where a task sits in the revise queue, and how to get to it. */
 export interface ReviseTarget {
@@ -151,8 +152,39 @@ export async function readReviseInput(page: Page, runDir: string): Promise<Revis
   return { feedback, rubric: rubric.trim() };
 }
 
-/** Put Claude's rewritten rubric back into the editable Monaco box, and prove it took. */
-export async function writeRubric(page: Page, rubric: string, runDir: string): Promise<void> {
+/**
+ * Put Claude's rewritten rubric back into the editable Monaco box — but only if it is legal.
+ *
+ * Snorkel's Review Checklist marks EVERY rubric rule "High" severity, which means a single
+ * failure and the task is not accepted. Those rules are mechanical (one line per criterion,
+ * starts with "Agent", score in {±1,±2,±3,±5}, at least 3 negatives, no reference to /tests/,
+ * task.toml, instruction.md or the oracle) — so they are checked, not hoped for.
+ *
+ * A rubric that fails is not written. Sending a reviewer a rubric that breaks the rules they are
+ * about to grade against wastes their time and ours, and the whole point of the revise lap is to
+ * stop doing that.
+ */
+export class RubricRejected extends Error {
+  report: string;
+  constructor(report: string) {
+    super(
+      `Refusing to submit this rubric: it breaks rules Snorkel marks HIGH severity, which means ` +
+        `the task would not be accepted.\n\n${report}`,
+    );
+    this.name = "RubricRejected";
+    this.report = report;
+  }
+}
+
+export async function writeRubric(
+  page: Page,
+  rubric: string,
+  runDir: string,
+  taskDir: string | null = null,
+): Promise<void> {
+  const report = lintRubric(rubric, taskDir);
+  if (!report.ok) throw new RubricRejected(formatRubricReport(report));
+
   await writeFieldMonaco(page, "submission.rubricField", rubric);
   await snap(page, runDir, "rubric-rewritten");
 }

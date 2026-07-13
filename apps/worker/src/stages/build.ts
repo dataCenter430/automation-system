@@ -253,7 +253,7 @@ export async function buildTask(input: BuildInput): Promise<BuildOutput> {
 export async function fixTask(args: {
   workspace: string;
   sessionId: string | null;
-  template: "03-fix.md" | "05-feedback-fix.md" | "06-revise.md";
+  template: "03-fix.md" | "05-feedback-fix.md" | "06-revise.md" | "07-rubric-fix.md";
   vars: Record<string, string | number>;
   timeoutMin: number;
   onProgress?: (msg: string) => Promise<void>;

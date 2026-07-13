@@ -198,6 +198,8 @@ const COUNT_EXCLUDE = /^(Dockerfile(\..+)?|docker-compose.*\.ya?ml|compose\.ya?m
 /** Evidence that a task declared machine-learning actually has anything to do with ML. */
 const ML_EVIDENCE = /torch|tensorflow|sklearn|scikit|keras|xgboost|\.ipynb|\btrain(ing)?\b|inference|\bmodel\b|\bdataset\b/i;
 
+import { reviewerChecks } from "./reviewer-checks.ts";
+
 export function lintTask(taskDir: string): LintResult {
   const f: Finding[] = [];
   const add = (rule: string, severity: Severity, file: string, message: string) =>
@@ -731,6 +733,25 @@ export function lintTask(taskDir: string): LintResult {
             `... and ${envDiags.length - RUFF_FINDING_CAP} more ruff diagnostics under environment/.`);
       }
     }
+  }
+
+  // ---- what the HUMAN REVIEWER checks --------------------------------------
+  //
+  // Everything above this line reproduces Snorkel's CI: break it and you get a red build in
+  // minutes. These reproduce the Review Checklist — the document a PERSON works through — and
+  // breaking those gets the task back three days later with a paragraph of prose. The checklist's
+  // own severity guidance is that a single "High" failure means the task is not accepted, so
+  // there is no reason to find out from a human what a regex can tell us now.
+  //
+  // Each finding carries the reviewer's severity alongside ours, so a warning here is still
+  // traceable to the High-severity criterion it comes from.
+  for (const r of reviewerChecks(taskDir)) {
+    f.push({
+      rule: r.rule,
+      severity: r.severity,
+      file: r.file,
+      message: `${r.message}  [reviewer checklist: ${r.reviewerSeverity}]`,
+    });
   }
 
   return { findings: f, clean: !f.some((x) => x.severity === "blocking") };

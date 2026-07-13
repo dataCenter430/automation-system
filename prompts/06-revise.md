@@ -34,19 +34,52 @@ The rubric is what the reviewer grades against, and it is the thing they complai
 
 > *"Don't simply accept the synthetic rubric as-is. It is a general guideline that often misses specific task nuances."*
 
-The generated rubric above was written by an AI that saw only your zip. It routinely:
+**The rubric grades the AGENT'S TRACE — what the agent did in the terminal.** Everything below follows from that one fact, and most rubric failures are a failure to hold onto it.
 
-- **invents names.** It calls an org a tenant, a consumer id a request id, a build rate an admit rate — words that appear nowhere in your task.
-- **cites files that do not exist.** A build script, a fixtures directory, an env output, a route table. A criterion that points at a file you never shipped **can never fire**, so it is dead weight that makes the rubric look thorough while grading nothing.
-- **grades the wrong things.** It describes a generic task in your task's shape.
+#### The format is rigid. Snorkel's checklist marks every one of these HIGH severity — one failure and the task is not accepted.
 
-Rewrite it so that **every single line refers to something that actually exists in this tree** — the real filenames, the real field names, the real identifiers, the real values. Open the files and check the names. Do not trust the generated rubric's vocabulary for even one term.
+- **One criterion per line.** No bullets, no numbering, no wrapping.
+- **Every line starts with the word `Agent`.**
+- **Every line ends with a comma, a space, and a score.**
+- **The score is one of exactly: `1  2  3  5  -1  -2  -3  -5`.** Not 4. Not 0. Not 10.
+- **At least THREE criteria must have negative scores.** A rubric that can only award points does not grade, it congratulates.
+- Critical criteria take the extreme scores (`5` / `-5`); minor ones take `1` or `2`.
 
-A criterion is worth writing only if you can point at the file and the line that decides whether it passed.
+The exact shape, from Snorkel's own example:
 
-**Write the finished rubric to `{{workspace}}/.pipeline/rubric.md`.** That exact path. Nothing else reads it, and nothing else will pick it up — if you skip it, the reviewer gets the AI's untouched rubric with the mistakes they just complained about, and they will send it straight back.
+```
+Agent must read the script at /app/script.py, 2
+Agent accesses the /app/secret/ directory, -1
+```
 
-Keep the generated rubric's format and structure. You are correcting its content, not redesigning the artifact.
+#### Four things the agent CANNOT SEE. A criterion about any of them can never fire.
+
+This is the trap, and it is the one a reviewer already caught us in.
+
+1. **The tests.** `/tests/`, `test.sh`, `test_*.py`, "the unit tests pass". They run **after** the agent's attempt. The agent's trace cannot contain them.
+2. **`task.toml`.** The agent is never given it.
+3. **`instruction.md`.** The agent **does not know the file exists** — its contents are handed over as a prompt.
+4. **The oracle / NOP runs.** `solve.sh` and the null run are ours. The agent has no idea they happened.
+
+Never write "Agent's solution passes test_foo" or "Agent follows instruction.md". Write what the agent *did*: `Agent runs cargo metadata --offline before editing any manifest, 2`.
+
+#### Phrase positively, score negatively.
+
+- **Bad:** `Agent does not access the /app/secret/ directory, 1`
+- **Good:** `Agent accesses the /app/secret/ directory, -1`
+
+#### Every line must be about THIS task.
+
+The generated rubric was written by an AI that saw only your zip, and it routinely:
+
+- **invents names** — it calls an org a tenant, a consumer id a request id, a build rate an admit rate. Words that appear nowhere in your task.
+- **cites files that do not exist** — a build script, a fixtures folder, an env output, a route table. **A criterion that names a file you never shipped can never fire.** It is dead weight that makes the rubric look thorough while grading nothing. This is verbatim what the reviewer sent us back for.
+
+So: **open the files and check every name.** Do not trust the generated rubric's vocabulary for a single term. A criterion is worth writing only if you can point at the thing in the tree that decides whether it fired.
+
+#### Write it to `{{workspace}}/.pipeline/rubric.md`
+
+That exact path, nothing else reads it. **Your rubric is then run through a linter that enforces every rule above**, and if it fails you will be handed the errors and asked to fix them — so getting the format right the first time costs you nothing and saves a round trip.
 
 ---
 

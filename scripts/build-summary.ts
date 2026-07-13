@@ -45,6 +45,16 @@ interface SourceDoc {
 }
 
 const SOURCE_DOCS: SourceDoc[] = [
+  // Snorkel's OWN onboarding deck — "Project Terminus, New Expert Onboarding, March 2026".
+  // 1.2 MB of slides, the single biggest Terminus document we have, and it was EXCLUDED from the
+  // playbook for being "onboarding slides". It is not filler: it carries the official difficulty
+  // table (Easy >80% / Medium 21-80% / Hard <=20% accuracy, measured against GPT-5.2 and Opus
+  // 4.6), the category taxonomy, the rubric contract, and the two-pass submission flow in
+  // Snorkel's own words — "Make sure checkbox is NOT checked when sending to reviewer! Overrides
+  // any current rubric you have."
+  //
+  // Extracted with `pdftotext -layout`. Regenerate it if the deck is ever updated.
+  "Terminus Onboarding (extracted).txt",
   "New Task Start Guide.txt",
   "Task Requirements.txt",
   "instruciton_guide.txt",
@@ -62,21 +72,26 @@ const SOURCE_DOCS: SourceDoc[] = [
 ]
   .map((doc): SourceDoc => ({ doc }))
   .concat([
-    // The two docs whose absence cost us a submission. Nothing in the playbook told the builder
-    // that a classifier reads the task's CONTENT and predicts an occupation from it, so a task
-    // written as a generic coding exercise classified as "Software Developers" — a blocked
-    // occupation — and failed the Occupation Diversity Eval. These are the blocked list and the
-    // allowed-sector list. They are not "sector lists we can skip"; they are the premise gate.
-    {
-      doc: "Sector.txt",
-      note:
-        "The assigned sector, the BLOCKED occupations, and the occupations that fail the " +
-        "Occupation Diversity Eval. Reproduce both lists verbatim in the playbook.",
-    },
-    {
-      doc: "Agriculture, Forestry, Fishing, and.txt",
-      note: "The allowed-sector whitelist. Reproduce it verbatim in the playbook.",
-    },
+    // ---- SCOPE. documentation/ holds docs for MORE THAN ONE Snorkel workstream, and mixing
+    // them is not a dilution problem, it is a correctness problem: a rule from another project
+    // imported into this playbook is a rule the build will follow into a rejection.
+    //
+    // NOT TERMINUS — deliberately excluded:
+    //
+    //   Sector.txt                            GERANIUM. It carries an "assigned sector"
+    //   Agriculture, Forestry, Fishing...txt   (Retail Trade) and a blocked-OCCUPATION list
+    //                                          ("Software Developers", "Data Scientists"...)
+    //                                          scored by an Occupation Diversity Eval.
+    //
+    //     A previous version of this file claimed these were "the two docs whose absence cost us
+    //     a submission" and pulled them in. That attribution was WRONG. Terminus rejects on
+    //     `category_classifier` — which is what our CI logs actually say — not on occupation.
+    //     Feeding the Geranium premise gate to a Terminus build tells it to rewrite a perfectly
+    //     good task into a Retail Trade business scenario for no reason, and to fear an eval that
+    //     does not run against it.
+    //
+    //   Hi, thanks for your interest in my.txt   recruiter mail.
+    //   Default_Task_Skeleton.zip                a zip, not prose (it is seeded, not read).
     {
       doc: "Reviewing Tasks docs/Defending Your submission.md",
       note: "How to answer a reviewer or CI rejection. Worth a short digest, not a section.",
@@ -114,7 +129,7 @@ const MIN_BYTES = 15_000;
  * the old playbook produces a perfectly-shaped, perfectly-sized file. No local check can catch
  * that. Read the diff (`git diff prompts/summary.txt`) before you trust a regenerated playbook.
  */
-const SECTION_COUNT = 13;
+const SECTION_COUNT = 12;
 
 /**
  * The six rules Snorkel's CI rejected us for, which the playbook covered weakly or not at all.
@@ -136,24 +151,6 @@ interface RequiredRule {
 }
 
 const REQUIRED_RULES: RequiredRule[] = [
-  {
-    marker: "RULE: OCCUPATION & SECTOR",
-    section: 2,
-    demand:
-      "A content-based CLASSIFIER — the Occupation Diversity Eval — reads the task's CONTENT and " +
-      "PREDICTS an occupation from it. If the prediction lands in the blocked list, the " +
-      "submission FAILS, and no field in task.toml can save it: the `category` enum in task.toml " +
-      "and this predicted occupation are UNRELATED, and the playbook must say so in those words. " +
-      "Reproduce, verbatim from Sector.txt, both the 'no longer accepting submissions' list and " +
-      "the 'Occupation Diversity Eval will fail' list, and reproduce the allowed-sector whitelist " +
-      "verbatim from the Agriculture/Forestry doc. Then give the defence as a rule the builder " +
-      "can act on: a generic coding exercise classifies as 'Software Developers' or 'Data " +
-      "Scientists' — both BLOCKED — so the task must be set inside an assigned sector's business " +
-      "domain (retail, wholesale, logistics, utilities, agriculture, food service) so that the " +
-      "classifier predicts a domain occupation instead. The engineering stays hard; the DOMAIN is " +
-      "what changes. State that this is decided BEFORE any file is written, because it is a " +
-      "property of the premise and cannot be patched in afterwards.",
-  },
   {
     marker: "RULE: CODEBASE_SIZE",
     section: 4,

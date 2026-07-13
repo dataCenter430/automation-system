@@ -49,85 +49,51 @@ SECTION 2. OCCUPATION & SECTOR -- THE CLASSIFIER YOU CANNOT SEE
 
 RULE: OCCUPATION & SECTOR
 
-Nothing else in this document matters if you fail this gate. It is not a formatting rule and
-it cannot be patched afterwards: it is a property of WHAT THE TASK IS ABOUT.
+This is the FIRST decision of a build, before a single file exists.
 
-A content-based CLASSIFIER -- the Occupation Diversity Eval -- reads the task's CONTENT and
-PREDICTS an occupation from it. If the prediction lands in the blocked list, the submission
-FAILS, and no field in task.toml can save it: the `category` enum in task.toml and this
-predicted occupation are UNRELATED, and the playbook must say so in those words.
+Three values in the category enum are BLOCKED by a separate LLM classifier that reads your
+instruction.md and the source files you ship under environment/. The classifier never reads
+task.toml. It predicts the occupational domain of the task independently.
 
-This is the FIRST decision of a build, before a single file exists. You cannot patch it in
-afterwards. It is a property of the premise.
+BLOCKED CATEGORIES (reject regardless of task.toml):
 
+  software-engineering
+  debugging
+  data-processing
 
---- 2.1 BLOCKED OCCUPATIONS (verbatim from Sector.txt) ---
+Setting a legal enum value in task.toml does NOT make the task legal if the classifier infers
+one of the blocked categories from the content. You cannot route around the block by labeling
+a code-debugging task as "system-administration". The classifier reads the actual artifacts.
 
-NO LONGER ACCEPTING SUBMISSIONS in these occupations:
-  Financial Managers
-  Accountants and Auditors
-  Financial and Investment Analysts
-  Software Quality Assurance Analysts and Testers
-  Data Scientists
-  Software Developers
+OPEN CATEGORIES (use one of these):
 
-LESS THAN 10 SUBMISSIONS LEFT (warning):
-  Medical and Health Service Managers
-  Registered Nurses
+  system-administration
+  build-and-dependency-management
+  games
+  machine-learning
+  security
+  scientific-computing
 
-OCCUPATION DIVERSITY EVAL WILL FAIL for these occupations:
-  Business Intelligence Analysts
-  Financial Managers
-  Financial and Investment Analysts
-  Medical and Health Services Managers
-  Software Quality Assurance Analysts and Testers
-  Software Developers
-  Accountants and Auditors
-  Registered Nurses
-  Sales Representatives of Services, Except Advertising, Insurance, Financial Services, and Travel
-  Data Scientists
-  News Analysts, Reporters, and Journalists
-  Acute Care Nurses
-  Medical Scientists, Except Epidemiologists
-  Education Administrators, Postsecondary
+To land in an open category, the task DOMAIN must live there. Example themes that pass:
 
+  system-administration   configuring firewall rules, provisioning infrastructure, cron jobs,
+                          log rotation, user management, service orchestration
+  build-and-dependency-management   crafting Makefiles, resolving dependency conflicts,
+                          cross-compiling, package publishing, version pinning pipelines
+  games                   building a game engine component, physics simulation, game AI,
+                          procedural generation
+  machine-learning        hyperparameter tuning pipelines, model serving infra, dataset curation
+  security                policy authoring, vulnerability remediation, secret management,
+                          compliance verification, audit log forensics
+  scientific-computing    numerical simulation, solver implementation, data assimilation,
+                          signal processing pipelines
 
---- 2.2 ALLOWED SECTOR WHITELIST (verbatim from the Agriculture/Forestry doc) ---
+A task might still involve writing code, but if the PROBLEM being solved is "fix the NGINX
+config so it passes a compliance audit", that is system-administration. If the problem is
+"debug this code that doesn't work", that is debugging and will be blocked.
 
-  Agriculture, Forestry, Fishing, and Hunting
-  Mining, Quarrying, and Oil and Gas Extraction
-  Utilities
-  Retail Trade
-  Accommodation and Food Services
-  Wholesale Trade
-  Transportation and Warehousing
-
-
---- 2.3 THE DEFENCE ---
-
-A generic coding exercise classifies as "Software Developers" or "Data Scientists" -- both
-are BLOCKED -- so the task must be set inside an assigned sector's business domain (retail,
-wholesale, logistics, utilities, agriculture, food service) so that the classifier predicts a
-domain occupation instead. The engineering stays hard; the DOMAIN is what changes.
-
-  WRONG -- classifies as Software Developers / QA Analysts / Data Scientists:
-    "migrate the ImageMagick textile feature extractor to C + SQLite"
-    "automate the Graphviz worker for the stained-glass vault"
-    "write an ETL pipeline to parse customer logs"
-    "find and fix the defects in this code"
-
-  RIGHT -- classifies by domain occupation:
-    "reconcile the freight-rating rules for a wholesale distributor's carrier contracts"
-    "compute markdown eligibility for a grocery chain's perishable inventory"
-    "validate a rail carrier's hazmat manifest against the current tariff schedule"
-
-Before you create a single file, write this sentence down and answer it:
-
-    "The person who would file this ticket holds the job title: ____________."
-
-If that title is Software Developer, Software QA Analyst, or Data Scientist -- THE TASK IS
-ALREADY DEAD. Do not adjust the wording. Do not change the tags. Do not pick a different enum
-value. GO BACK AND CHANGE WHAT THE TASK IS ABOUT.
+Choose your sector BEFORE you begin. If you cannot articulate a domain outside software-
+engineering / debugging / data-processing, stop and pick a different task idea.
 
 
 ================================================================================
@@ -177,6 +143,27 @@ number_of_milestones must equal the [[steps]] count, [environment] gains workdir
 are no top-level [agent]/[verifier] blocks (they become [steps.agent]/[steps.verifier]).
 2 to 5 milestones max. Each milestone must be a hard prerequisite of the next. Files persist
 across milestones. The container filesystem is shared between milestones.
+
+Milestone directory layout:
+
+  <task-name>/
+  |-- task.toml                    with [[steps]] blocks, number_of_milestones > 0
+  |-- environment/
+  |   |-- Dockerfile
+  |   `-- ...
+  `-- steps/
+      |-- milestone_1/
+      |   |-- instruction.md
+      |   |-- tests/
+      |   |   |-- test.sh
+      |   |   `-- test_m1.py
+      |   `-- solution/
+      |       |-- solve.sh         wrapper that calls solve1.sh
+      |       `-- solve1.sh        actual oracle for milestone 1 ONLY
+      |-- milestone_2/
+      |   `-- ...
+      `-- milestone_3/
+          `-- ...
 
 
 ================================================================================
@@ -258,6 +245,11 @@ This rule is enforced by the validate_task_fields CI check, which is BLOCKING.
 
 codebase_size is a categorical label (not a literal file count); count environment files the
 agent works with, not outputs the agent produces. Verbatim from Task Requirements.txt:
+
+  "This is a categorical label (not a literal file count); count environment files the
+  agent works with, not outputs the agent produces."
+
+Bands:
 
   minimal    0-20 files
   small      20+ files
@@ -366,7 +358,7 @@ verbatim from the image best-practices docs:
   C/C++ builds with make/cmake
 
 CARVE-OUT: if the TASK requires the agent to compile or build code, leaving the toolchain in
-the final image is fine and expected.
+the final image is fine and expected. The check understands this distinction.
 
 CI check: check_no_build_tools_in_runtime
 
@@ -490,6 +482,10 @@ RULE: INSTRUCTION.MD
 instruction.md is what the model actually reads. It must read like a real engineer typing into
 a terminal agent -- not like generated documentation.
 
+State WHAT correct behaviour is; NEVER prescribe the build, test or workflow steps that
+produce it. Keep only the authoritative behaviour and I/O expectations -- drop formatting-
+specific requirements and implementation hints.
+
 The six principles (all High severity; violating any one is a send-back):
 
   1. CONCISE.        One sentence minimum, three paragraphs maximum. That is the whole budget.
@@ -504,6 +500,11 @@ The six principles (all High severity; violating any one is a send-back):
 RATING: BLOCKING. Review Checklist.md rates hints and STEPWISE INSTRUCTIONS as High severity.
 The Blocking Issues doc lists the instruction.md rewrite among the blockers.
 
+Contrast from instruciton_guide.txt:
+
+  BAD:   "First, use the `ls` command to see files, then..."
+  GOOD:  "The source data is in /data. Output the result to..."
+
 Hard prohibitions:
 
   - No emojis. Not one.
@@ -516,7 +517,8 @@ Hard prohibitions:
 
 The same ban on LLM-tells extends to the environment fixtures: they must read like real
 internal artefacts -- no robotic meta-commentary, no 'Determination: ...' summaries, no note
-column that hands the agent the conclusion it was supposed to derive.
+column that hands the agent the conclusion it was supposed to derive. Fixtures should not
+cite raw input filenames, use explicit AI personas, or have AI-style blue coloring.
 
 ANTI-EXAMPLES (documented rejections):
 
@@ -541,11 +543,6 @@ ANTI-EXAMPLES (documented rejections):
       "`backend/processor.py` -- must export four functions:
          apply_grayscale(input_path: Path, output_path: Path) -> Path ..."
       -> Dictates structure, library, signature. Nothing left to solve.
-
-GOOD CONTRAST (verbatim from instruciton_guide.txt):
-
-  BAD:   "First, use the `ls` command to see files, then..."
-  GOOD:  "The source data is in /data. Output the result to..."
 
 Vary your voice between tasks. Some engineers are terse, some are chatty. Do not converge on
 a house style -- the dataset is trying to capture real variance.
@@ -704,6 +701,21 @@ If you use the long_context subcategory you MUST clear this bar:
   - The document must be AUTHORITATIVE to the solution.
   - It must NOT be solvable by grep, keyword search, or field extraction.
   - Rules must INTERACT across distant sections.
+  - The verifier checks behavior or outputs that depend on details from the long documents.
+  - If multiple documents are provided, the task requires resolving interactions across
+    documents, not just opening one obvious file.
+  - The instruction tells the agent where the long documents live without leaking the exact
+    answer path.
+
+Immediate rejection patterns for long_context:
+  - Under 50k valid long-context tokens.
+  - A generator script but no shipped document corpus.
+  - Large JSONL/CSV/TSV/database inputs labeled as long context.
+  - Uniform machine logs with clear delimiters and fixed fields.
+  - Dozens of tiny files whose aggregate content is far below 50k tokens.
+  - Long files used only for keyword search or simple analytics.
+  - Long documents that are historical, optional, non-authoritative, or unrelated to the oracle.
+  - Repeated/filler text used to inflate size.
 
 9.6 CROSS-TOOL / MULTI-LANGUAGE BOUNDARIES
 Deliberately span boundaries: shell pipeline + policy DSL + compiled binary + JSON schema.
@@ -714,11 +726,37 @@ Give the environment a check that PASSES even when the work is wrong. A schema v
 that only checks shape. A build that compiles. The model runs it, sees green, declares
 victory, and scores 0.
 
-9.8 WHAT NOT TO DO
+9.8 DOCUMENTED MODEL WEAKNESSES TO EXPLOIT
+Consult the weaknesses documentation. Both models share these failure modes:
+  - Miss exact output contracts (ordering, precision, schema fields).
+  - Fail at edge cases in parsers and data transforms.
+  - Can be gamed by brittle verifiers (design yours to resist gaming).
+  - Miss deeper consistency rules across multiple related files or output artifacts.
+  - Fail on messy real-world input: duplicate rows, malformed lines, timezone boundaries,
+    mixed encodings, empty records, stable sorting requirements, partially corrupted data.
+
+Claude-specific weaknesses:
+  - Follows prompts closely but does not proactively question unusual data or hidden
+    constraints unless the task structure explicitly requires it.
+  - Can overlook small but important details buried across many files in a large codebase.
+  - Often produces a good-looking solution without running sufficient negative or edge-case
+    checks.
+  - Failures tend to occur at the interaction boundary between tools in multi-language tasks.
+
+GPT-specific weaknesses:
+  - Long-context degradation: 45.4% at 1M tokens.
+  - More likely to "helpfully" deviate from instructions.
+  - Tends to construct a "reasonable" interpretation when input data is ambiguous rather than
+    flagging ambiguity.
+  - Noticeably weaker output on Go, Rust, and niche frameworks.
+
+9.9 WHAT NOT TO DO
   - Do not make it hard with volume: 30 requirements, 12 output files, a 900-word prompt.
   - Do not make it hard by being obscure or unfair.
   - Do not build a front-end/visualization task.
   - Do not clone an existing task.
+  - Do not hand the agent the answer in environment fixtures (e.g., a Notes column that says
+    which product "does NOT qualify" or "qualifies at the 8-year credit rate").
 
 
 ================================================================================
@@ -779,12 +817,12 @@ THE DOCUMENTED SEND-BACKS (each is BLOCKING):
   [ ] BLOCKING: A comment or blank line between `RC=$?` and the `if` in test.sh.
   [ ] BLOCKING: A trailing `exit "$RC"` after the reward block in test.sh.
   [ ] BLOCKING: Ruff F841 (unused exception variable) in any shipped Python file.
-  [ ] BLOCKING: Occupation Diversity Eval predicts a blocked occupation (RULE: OCCUPATION & SECTOR).
   [ ] BLOCKING: codebase_size does not match actual file count (RULE: CODEBASE_SIZE).
   [ ] BLOCKING: Multi-stage build missing when Dockerfile compiles artifacts (RULE: MULTI-STAGE).
   [ ] BLOCKING: Dependencies not hash-locked (RULE: LOCKFILES).
   [ ] BLOCKING: instruction.md gives hints or stepwise instructions (RULE: INSTRUCTION.MD).
   [ ] BLOCKING: Python files fail ruff check (RULE: RUFF).
+  [ ] BLOCKING: Category blocked by classifier despite task.toml value (RULE: OCCUPATION & SECTOR).
 
 RUBRIC (authored in the Snorkel submission UI):
   [ ] Flat list of criterion lines for a non-milestone task.
@@ -792,6 +830,12 @@ RUBRIC (authored in the Snorkel submission UI):
   [ ] Scores are only +/- 1, 2, 3, or 5. THE NUMBER 4 IS FORBIDDEN.
   [ ] At least THREE distinct criteria assign negative rewards.
   [ ] Max cumulative score (sum of positives) is 10-40 points for a non-milestone task.
+  [ ] No criteria reference running pytest or checking results from the /tests/ directory.
+  [ ] No criteria reference task.toml or the existence of instruction.md.
+  [ ] No criteria reference "the prompt" within rubric text.
+  [ ] No language reflecting "x, y, z will receive half credit" or direct grading-system references.
+  [ ] Rubric criteria must be detailed and precise, not vague.
+  [ ] Critical criteria use extreme scores (5, -5); minor criteria use less extreme scores.
 
 
 ================================================================================
@@ -882,6 +926,7 @@ states which source said what, and gives the single ruling the build session mus
    A separate LLM classifier reads instruction.md and shipped source and predicts category.
    RULING: The classifier reading content wins over the field value. Setting a legal value in
    task.toml does NOT make the task legal if the content classifies into a blocked category.
+   See SECTION 2 (RULE: OCCUPATION & SECTOR).
 
 10. CODEBASE_SIZE LABEL
     Some docs describe it as approximate ("rough scale").
@@ -889,6 +934,26 @@ states which source said what, and gives the single ruling the build session mus
     count environment files the agent works with, not outputs the agent produces."
     RULING: Count the files shipped under environment/ after .dockerignore, then declare the
     band. The validate_task_fields CI check enforces this.
+
+11. LLM-TELL REJECTION SCOPE
+    The prompt-generation project docs (different Snorkel workstream) describe rubric and
+    document-format rules that do NOT apply to Terminus tasks.
+    RULING: Ignore that project's specific rubric format rules. However, the reviewer
+    rejection patterns transfer: LLM-tells in generated artefacts (robotic meta-commentary,
+    citing raw input filenames, explicit personas, 'Determination: ...' summaries) and input
+    files that are too thin or that hand the agent the answer are BLOCKING in Terminus too.
+
+12. RUBRIC LINE FORMAT
+    Rubrics Guideline: every criterion line starts with "Agent" and ends with ", [Score]".
+    Some examples show scores without leading space.
+    RULING: Start with "Agent", end with ", +N" or ", -N" (comma, space, sign, digit).
+
+13. APT PACKAGE VERSION PINNING
+    Review Checklist: "Apt package versions are pinned" rated as LOW severity.
+    Dockerfile best-practices: "All dependencies are exact-pinned".
+    RULING: Apt packages do NOT require version pins for common packages (the low severity
+    holds), but language-level packages (pip, npm, cargo, gem) MUST be exact-pinned. If an
+    apt package is niche and likely to change behavior, pin it.
 
 
 ================================================================================
@@ -900,7 +965,7 @@ sanctioned base. All verifier deps baked in. tests/ and solution/ never in the i
 test.sh reward block, byte for byte. instruction.md that sounds like a tired human, gives the
 what, hides the how, uses absolute paths, and fits in three paragraphs. An oracle that derives.
 Tests that re-derive, that re-execute the agent's artifact, and that judge it on cases it has
-never seen. A domain that does not classify as Software Developer or Data Scientist. And a
-problem whose obvious solution looks right and is wrong.
+never seen. A domain that does not classify as software-engineering, debugging, or data-
+processing. And a problem whose obvious solution looks right and is wrong.
 
 Then build the image and RUN the tests. Oracle -> 1. Null -> 0. Only then say you are done.

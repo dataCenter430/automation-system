@@ -26,7 +26,9 @@ import { zipTask, assertNoWrapperDir } from "./stages/zip.ts";
 import { generateExplanations } from "./stages/explain-generate.ts";
 import { openNewSubmission, fillSubmissionForm, AttestationRefused, FormNotReady } from "./stages/upload.ts";
 import { checkFeedback, FeedbackInconclusive } from "./stages/feedback.ts";
-import { findSubmitted, clickSubmit, enableRubricGeneration } from "./stages/submit.ts";
+import { findSubmitted, clickSubmit, finaliseForm, pickAht } from "./stages/submit.ts";
+import { readQueue, QUEUE_LIMIT } from "./stages/queue-gate.ts";
+import { canonicalBaseImage } from "./stages/canonical-image.ts";
 import { attach, detach, snorkelPage, BrowserUnavailable, type Attached } from "./browser/cdp.ts";
 import { SelectorNotFound, UnconfirmedSelector } from "./browser/selectors.ts";
 import { RateLimited } from "./claude/errors.ts";
@@ -499,11 +501,18 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
         });
 
         if (r.verdict === "pass") {
-          // The rubric box is ticked ONLY now — after Snorkel itself says the build is clean.
-          await enableRubricGeneration(page, runDir);
+          // The green-run-only fields — rubric, "Send to reviewer?", the two attestation radios,
+          // the Task Inspiration id, the time budget — are NOT set here any more. They are set by
+          // finaliseForm() in SUBMITTING, immediately before the click.
+          //
+          // The reason is the gap. A task parks at AWAITING_APPROVAL until a human presses the
+          // button, which may be hours; SUBMITTING then re-navigates to the submission URL. State
+          // set here has to survive that gap and that reload, on a form that autosaves whenever it
+          // feels like it. Setting every one of those fields on the page we are actually about to
+          // submit, seconds before we submit it, removes the question entirely.
           await transition(ctx, row, ws, S.AWAITING_APPROVAL, {
             stage: "feedback",
-            message: `✅ Snorkel checks passed in ${r.elapsedSec}s · rubric ticked · waiting for your approval`,
+            message: `✅ Snorkel checks passed in ${r.elapsedSec}s · waiting for your approval`,
             detail: { elapsed_sec: r.elapsedSec },
           });
         } else {
@@ -612,29 +621,92 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
         }
         a = await attach();
 
+        // ---- THE ACCOUNT-SAFETY GATE ------------------------------------------------------
+        // Snorkel limits submissions while the revision queue is full, and the operator's #1
+        // rule is that this account must never do anything that could get it banned. So this
+        // runs BEFORE the irreversible click, reads Snorkel's own "N tasks to be revised"
+        // sentence (never a card count — the owner-filter userscript hides cards), and refuses
+        // if it cannot be read at all. A blocked task goes back to AWAITING_APPROVAL rather
+        // than failing: nothing is wrong with it, the queue is just full.
+        const queue = await readQueue(a, runDir);
+        if (!queue.maySubmit) {
+          await patchState(ws, { lastError: queue.reason });
+          await transition(ctx, row, ws, S.AWAITING_APPROVAL, {
+            stage: "submit",
+            message: queue.reason,
+            detail: { total: queue.total, terminus: queue.terminus, limit: QUEUE_LIMIT },
+          });
+          return true;
+        }
+
         // A crash in SUBMITTING means we do not know whether the click landed. Look before
         // clicking: a duplicate submission cannot be undone. findSubmitted() now does this
         // in a throwaway tab, so the submission form below survives the check.
-        const existing = await findSubmitted(a, row.task_id, runDir);
-        const outcome = existing.submitted
-          ? { ...existing, note: `already submitted — did not click again (${existing.note})` }
+        //
+        // Keyed on SNORKEL'S submission uid, not row.task_id. task_id is the Task Gallery
+        // uuid the operator pastes; the revise card is keyed by the uid Snorkel assigns. The
+        // old code looked the card up by task_id, which never matched — so this guard answered
+        // "not submitted yet" every single time, and a retry here would have clicked Submit a
+        // second time. If the uid is missing, findSubmitted throws CannotReconcile rather than
+        // guessing, and the task parks for a human.
+        const existing = await findSubmitted(a, row.submission_id, runDir);
+        let outcome;
+        if (existing.submitted) {
+          outcome = { ...existing, note: `already submitted — did not click again (${existing.note})` };
+        } else {
           // The SUBMISSION page — not /home, which is what this used to hand to clickSubmit,
           // guaranteeing it looked for the Submit button on the wrong page.
-          : await clickSubmit(a, await snorkelPage(a, s.submissionUrl), row.task_id, runDir);
+          const page = await snorkelPage(a, s.submissionUrl);
+
+          // "Does this task use an approved canonical base image?" is an ATTESTATION, so it is
+          // computed from this task's own Dockerfile against Snorkel's list — never assumed.
+          // `null` means we could not tell, and a statement we cannot verify is one we must not
+          // sign: the task parks for a human instead.
+          const base = canonicalBaseImage(ws);
+          if (base.canonical === null) {
+            throw new Error(
+              `Refusing to submit: cannot determine whether this task uses an approved canonical ` +
+                `base image — ${base.why}\n\n` +
+                `That question is an attestation on Snorkel's form. Answering it without knowing ` +
+                `would be signing a statement we have not checked.`,
+            );
+          }
+
+          // PASS 1 of two. rubric = TRUE, sendToReviewer = FALSE.
+          //
+          // This submission is SUPPOSED to come back to the revise queue: that is how Snorkel
+          // generates the rubric ("Rubric guide line.txt" line 30-31). Pass 2 — untick rubric,
+          // tick send-to-reviewer — happens on the revise page, after the rubric exists and has
+          // been edited. Ticking both at once is what line 32 warns overwrites your rubric.
+          await finaliseForm(page, runDir, {
+            taskId: row.task_id,
+            ahtMinutes: pickAht(),
+            pass: "ci",
+            canonicalBaseImage: base.canonical,
+          });
+
+          outcome = await clickSubmit(a, page, row.submission_id, runDir);
+        }
 
         await patchTask(row.task_id, {
           task_status: TaskStatus.AI_REVIEW, // 1 = AI review, per your lifecycle
-          ...(outcome.submissionId ? { submission_id: outcome.submissionId } : {}),
+          // NOTE: submission_id is NOT written here. It is captured from the page header during
+          // upload and is the real per-task uid. The old code overwrote it with a uuid parsed
+          // out of the revise-card href — which is the PROJECT'S submission-stage id and is
+          // identical on every Terminus card (941bede0-…). Writing it here destroyed the one
+          // identifier the revise queue can be searched by.
           ...(outcome.assignmentId ? { assignment_id: outcome.assignmentId } : {}),
         });
         await transition(ctx, row, ws, S.SUBMITTED, {
           stage: "submit",
           message: `submitted · task_status → AI review · ${outcome.note}`,
-          detail: { submission_id: outcome.submissionId, assignment_id: outcome.assignmentId },
+          detail: { submission_id: row.submission_id, assignment_id: outcome.assignmentId },
         });
       } catch (e) {
         // Ambiguous submit state is exactly when a machine must stop and a human must look.
-        // That includes "the Submit selector is still a guess" — see UnconfirmedSelector.
+        // That includes "the Submit selector is still a guess" (UnconfirmedSelector), "I cannot
+        // tell whether this was already submitted" (CannotReconcile), and "I cannot read the
+        // revision queue" (QueueUnreadable).
         await fail(ctx, row, ws, "submit", (e as Error).message, true);
       } finally {
         if (a) await detach(a);

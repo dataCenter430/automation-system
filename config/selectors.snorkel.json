@@ -32,8 +32,29 @@
       ]
     },
     "home.reviseCard": {
-      "description": "The revise card for ONE task. The task uuid IS the testid prefix. Its href carries ?assignmentId=",
-      "candidates": [{ "by": "testid", "value": "{task_id}-Terminus-2nd-Edition" }]
+      "description": "The revise card for ONE task. Keyed by SNORKEL'S SUBMISSION UID — NOT our task_id. Proven from the live DOM: the card testid prefix (61988421-…) is the same uuid the submission page shows next to 'UID:', and it is NOT the Task Inspiration uuid (7228123e-…) that the operator pastes as task_id. Keying this on task_id meant it never matched, which silently disarmed the double-submit guard in findSubmitted(). Its href carries ?assignmentId=.",
+      "candidates": [{ "by": "testid", "value": "{submission_uid}-Terminus-2nd-Edition" }]
+    },
+    "home.reviseQueueCount": {
+      "description": "'14 tasks to be revised' — THE authoritative queue size, rendered by Snorkel from the true list. Never count cards instead: the list is filtered by the operator's own owner-filter userscript AND by Snorkel's search box, both of which HIDE cards, so counting would UNDERCOUNT and let a submission through the <10 gate that should have been refused.",
+      "candidates": [
+        { "by": "css", "value": "h1.text-heading:has-text('Tasks to be revised') + div" },
+        { "by": "text", "value": "/\\d+ tasks? to be revised/" }
+      ]
+    },
+    "home.ownerFilterBadge": {
+      "description": "The operator's userscript filter badge ('Owner: Mickey — 4 shown · 9 in sheet'). If this is VISIBLE the revise list is filtered and card counts are lies. Presence is a reason to distrust a card count, never a reason to distrust home.reviseQueueCount.",
+      "candidates": [{ "by": "css", "value": "#snorkel-badge:not([hidden])" }]
+    },
+    "home.reviseCardAny": {
+      "scope": "home.assignmentsList",
+      "description": "Every revise card, across ALL projects (the queue is cross-project: Terminus-2nd-Edition AND e.g. CDG_Beaver_Prod_vFYAR). Used only to CROSS-CHECK the header count, never as the count itself.",
+      "candidates": [{ "by": "testid", "value": "project-card" }]
+    },
+    "home.reviseCardTerminus": {
+      "scope": "home.assignmentsList",
+      "description": "Revise cards belonging to Terminus-2nd-Edition only.",
+      "candidates": [{ "by": "css", "value": "[data-testid='project-card']:has(a[data-testid$='-Terminus-2nd-Edition'])" }]
     },
 
     "submission.uid": {
@@ -62,11 +83,16 @@
     },
     "submission.zipFilename": {
       "scope": "submission.zipField",
-      "description": "Rendered filename after a successful attach — proof the upload took",
-      "candidates": [{ "by": "css", "value": "[class*='filename'], [data-testid*='file-name']" }]
+      "description": "Rendered filename after a successful attach — proof the upload took. The old candidates ([class*=filename], [data-testid*=file-name]) matched NOTHING on the real page: once a file is attached the dropzone is REPLACED by a success card, and the name lives in a .text-color-success div.",
+      "candidates": [{ "by": "css", "value": ".text-color-success.text-base-medium" }]
+    },
+    "submission.zipRemove": {
+      "scope": "submission.zipField",
+      "description": "'Remove file' — the attached-file card REPLACES the <input type=file>, so re-uploading a re-zipped task (every revision does) requires removing the old one first or there is no input to set.",
+      "candidates": [{ "by": "css", "value": "button[title='Remove file']" }]
     },
     "submission.zipField": {
-      "description": "Whole upload field block",
+      "description": "Whole upload field block. TWO STATES: an empty dropzone with input[type=file], or a success card naming the attached zip.",
       "candidates": [{ "by": "testid", "value": "field-upload_a_zip_file" }]
     },
 
@@ -135,20 +161,104 @@
     },
 
     "submission.generateRubricCheckbox": {
-      "description": "PLACEHOLDER — 'generate rubric automatically'. Confirm with `npm run selectors:record`. Tick ONLY after Check feedback comes back green.",
-      "$unconfirmed": true,
+      "description": "'Click here to generate rubric(s)'. CONFIRMED against the live DOM (was a placeholder). Tick ONLY after Check feedback comes back green. The old fallback ([data-testid*='rubric'] [role=checkbox]) also matched field-test_rubrics and was a coin flip; this is exact.",
       "candidates": [
-        { "by": "css", "value": "[data-testid*='rubric'] [role=checkbox]" },
-        { "by": "role", "role": "checkbox", "name": "/generate.*rubric/i" }
+        { "by": "css", "value": "[data-testid='field-checkbox_evaluate_rubrics'] [role=checkbox]" },
+        { "by": "role", "role": "checkbox", "name": "/generate rubric/i" }
+      ]
+    },
+    "submission.sendToReviewerCheckbox": {
+      "description": "'Send to reviewer?'. Snorkel's own description: 'Check to send to reviewer if difficulty and quality checks are passing. OTHERWISE, IT WILL ALWAYS RESULT IN REVISION.' Nothing in this system ever ticked it, and it defaults to unchecked on a fresh submission — so every submission we made was bound for the revision queue no matter how good it was. Confirmed ticked (aria-checked=true) on a real human revision.",
+      "candidates": [
+        { "by": "css", "value": "[data-testid='field-checkbox_send_to_reviewer'] [role=checkbox]" },
+        { "by": "role", "role": "checkbox", "name": "Send to reviewer?", "exact": true }
       ]
     },
     "submission.submitButton": {
-      "description": "PLACEHOLDER — the real Submit. Irreversible. Confirm with `npm run selectors:record`.",
-      "$unconfirmed": true,
+      "description": "The real Submit. Irreversible. CONFIRMED against the live DOM (was a placeholder whose fallback `button[type=submit]` could have matched a different form's button and reported success).",
       "candidates": [
-        { "by": "role", "role": "button", "name": "Submit", "exact": true },
-        { "by": "css", "value": "button[type=submit]" }
+        { "by": "testid", "value": "document-review-primary-submit" },
+        { "by": "role", "role": "button", "name": "Submit", "exact": true }
       ]
+    },
+
+    "submission.canonicalBaseImageRadio": {
+      "description": "'Does this task use an approved canonical base image?' Yes/No. Anchored on the QUESTION TEXT, not on the field's hash suffix (field-boolean-7b32a) — the hash comes from Snorkel's form schema and changes if they edit the form. The React ids (_r_59_-true) are useId() output and provably differ between page loads, so they can never be used. The real <input type=radio> is `pointer-events:none; opacity:0` and cannot be clicked — click the [role=radio] button.",
+      "candidates": [
+        { "by": "css", "value": "[data-testid^='field-boolean-']:has(label:has-text('approved canonical base image')) [role=radio][value='{value}']" },
+        { "by": "css", "value": "[data-testid='field-boolean-7b32a'] [role=radio][value='{value}']" }
+      ]
+    },
+    "submission.taskGalleryRadio": {
+      "description": "'Did you use a Task Inspiration from the Task Gallery for this submission?' Yes/No. THIS RADIO IS A BRANCH, NOT A LEAF: answering Yes reveals a REQUIRED 'Task Inspiration ID' textarea. Same text-anchoring rationale as canonicalBaseImageRadio.",
+      "candidates": [
+        { "by": "css", "value": "[data-testid^='field-boolean-']:has(label:has-text('Task Inspiration from the Task Gallery')) [role=radio][value='{value}']" },
+        { "by": "css", "value": "[data-testid='field-boolean-46f6d'] [role=radio][value='{value}']" }
+      ]
+    },
+    "submission.taskInspirationId": {
+      "description": "'Task Inspiration ID' — the UUID of the claimed gallery task. REQUIRED, and only MOUNTED when the Task Gallery radio is Yes. This is our task_id: the operator pastes the gallery uuid when adding a task, which is why task_id is NOT Snorkel's submission uid.",
+      "candidates": [
+        { "by": "css", "value": "[data-testid^='field-textarea-']:has(label:has-text('Task Inspiration ID')) textarea" },
+        { "by": "css", "value": "#textarea-3dd6b" }
+      ]
+    },
+    "submission.skeletonFeedback": {
+      "description": "'Pre-generated Task Skeleton Feedback (optional)'. We leave it empty.",
+      "candidates": [
+        { "by": "css", "value": "[data-testid^='field-textarea-']:has(label:has-text('Pre-generated Task Skeleton Feedback')) textarea" }
+      ]
+    },
+    "submission.commentsForReviewer": {
+      "description": "'Comments for Reviewer (optional)'.",
+      "candidates": [
+        { "by": "css", "value": "[data-testid^='field-textarea-']:has(label:has-text('Comments for Reviewer')) textarea" },
+        { "by": "css", "value": "#textarea-beca8" }
+      ]
+    },
+    "submission.aht": {
+      "description": "'How long did it take you to complete this submission?' — MINUTES. A plain number input. The operator wants a random pick from 180/200/220; a real human revision in the DOM used 200.",
+      "candidates": [
+        { "by": "css", "value": "#submission_aht" },
+        { "by": "css", "value": "[data-testid='field-submission_aht'] input[type=number]" }
+      ]
+    },
+    "submission.testQualityReportField": {
+      "description": "'Test Quality Report (optional)' — a FOURTH Monaco report we never knew about. Populated by CI alongside Summary / Quality check / Agent review.",
+      "candidates": [{ "by": "testid", "value": "field-test_quality_judge_report" }]
+    },
+
+    "revise.sidebarToggle": {
+      "description": "The 'task-notes' rail button. The sidebar holds the reviewer's feedback; Radix does not mount its content while it is closed, so this must be pressed (aria-pressed=true) before the feedback can be read.",
+      "candidates": [{ "by": "css", "value": "button[aria-label='task-notes']" }]
+    },
+    "revise.sidebar": {
+      "description": "The Task Notes sidebar panel.",
+      "candidates": [{ "by": "testid", "value": "collapsible-sidebar-panel" }]
+    },
+    "revise.feedbackToggle": {
+      "scope": "revise.sidebar",
+      "description": "The 'Reviewer Feedback' collapsible header. Must be aria-expanded=true or the feedback text is not in the DOM at all.",
+      "candidates": [{ "by": "css", "value": "button:has-text('Reviewer Feedback')" }]
+    },
+    "revise.feedbackText": {
+      "scope": "revise.sidebar",
+      "description": "THE REVIEWER'S FEEDBACK, as plain text. This is the whole reason the clipboard is not needed: it is NOT inside Monaco, it is a .whitespace-pre-line div, so textContent gives the complete text with newlines intact — per-tab, with no global clipboard to race over at 8 concurrent revisions.",
+      "candidates": [{ "by": "css", "value": ".whitespace-pre-line" }]
+    },
+    "revise.disagreeCheckbox": {
+      "scope": "revise.sidebar",
+      "description": "'Do you disagree with the reviewer feedback?' — READ ONLY. The system never ticks this. Disagreeing with a human reviewer is not a decision an automation may take.",
+      "candidates": [{ "by": "css", "value": "[role=checkbox][aria-label*='disagree']" }]
+    },
+
+    "ext.copyFeedback": {
+      "description": "The operator's Chrome extension: 'Copy Reviewer Feedback'. FALLBACK ONLY — revise.feedbackText reads the same text straight from the DOM, which is per-tab and safe under concurrency. This button writes to the ONE global OS clipboard, so two concurrent revisions using it can hand each other's feedback to the wrong Claude session.",
+      "candidates": [{ "by": "css", "value": "#stc-copy-feedback-btn" }]
+    },
+    "ext.copySummaries": {
+      "description": "The operator's Chrome extension: 'Copy title + summaries'. A genuine fallback for the four Monaco reports, which ARE virtualized (field-text_summary renders 8 of ~284 lines). Try window.monaco's model API first — same text, no clipboard, no race.",
+      "candidates": [{ "by": "css", "value": "#stc-copy-btn" }]
     },
 
     "rubric.container": {

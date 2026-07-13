@@ -168,6 +168,35 @@ export async function resolve_(
   throw new SelectorNotFound(key, def.description, tried);
 }
 
+/**
+ * Every match, not just the first — for counting.
+ *
+ * resolve_() ends in `.first()`, which is right for acting on an element and useless for
+ * counting one: `(await resolve_(…)).count()` can only ever return 0 or 1, so a count built on
+ * it silently reports 1 no matter how many cards are on the page. The revise-queue gate needs a
+ * real count, and a gate that miscounts in the low direction submits when it should refuse.
+ *
+ * Returns 0 matches rather than throwing — "none of them are there" is a legitimate answer to
+ * "how many are there", unlike for resolve_(), where it is a broken selector.
+ */
+export async function resolveAll(
+  page: Page,
+  key: string,
+  opts: { tokens?: Record<string, string | number> } = {},
+): Promise<Locator | null> {
+  const def = load().elements[key];
+  if (!def) throw new Error(`No element "${key}" in config/selectors.snorkel.json`);
+
+  const tokens = opts.tokens ?? {};
+  const root: Page | Locator = def.scope ? await resolve_(page, def.scope, { tokens }) : page;
+
+  for (const c of def.candidates) {
+    const loc = build(root, c, tokens);
+    if ((await loc.count()) > 0) return loc;
+  }
+  return null;
+}
+
 /** Present-or-not, without throwing. For "did a verdict appear yet?" style polling. */
 export async function exists(
   page: Page,

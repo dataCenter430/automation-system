@@ -134,6 +134,43 @@ export async function setCheckbox(page: Page, key: string, want: boolean): Promi
   }
 }
 
+/* -------------------------------------------------------------------- setRadio */
+
+/**
+ * Answer a Yes/No radiogroup.
+ *
+ * Two things make this not a one-liner, both taken straight from the live DOM:
+ *
+ *   1. THE REAL <input type=radio> CANNOT BE CLICKED. Snorkel renders it
+ *      `position:absolute; pointer-events:none; opacity:0` and puts a Radix
+ *      `<button role="radio">` on top. Clicking the input is a no-op that reports success.
+ *
+ *   2. THE IDS ARE GARBAGE. `id="_r_59_-true"` is React useId() output — the submission page
+ *      and the revise page render the SAME fields with completely different ids. Selecting on
+ *      them works exactly until the next render. So the selectors are anchored on the question
+ *      text and the radio's `value`, both of which are stable.
+ *
+ * Idempotent, like setCheckbox: read, click only on a mismatch, then verify it took.
+ */
+export async function setRadio(page: Page, key: string, yes: boolean): Promise<void> {
+  const value = yes ? "true" : "false";
+  const radio = await resolve_(page, key, { tokens: { value } });
+
+  const isSet = async (): Promise<boolean> => (await radio.getAttribute("aria-checked")) === "true";
+
+  if (await isSet()) return;
+
+  await radio.click();
+  await page.waitForTimeout(150);
+
+  if (!(await isSet())) {
+    throw new Error(
+      `Clicked "${key}" (value=${value}) but aria-checked did not become true. ` +
+        `The radiogroup did not accept the answer.`,
+    );
+  }
+}
+
 /* ----------------------------------------------------------------- readMonaco */
 
 export interface MonacoModel {
@@ -161,8 +198,51 @@ export async function readMonaco(page: Page): Promise<MonacoModel[]> {
   });
 }
 
-/** Fallback for when window.monaco isn't reachable: read the aria-label textbox content. */
-export async function readMonacoFallback(page: Page, fieldKey: string): Promise<string> {
+/**
+ * Read ONE field's Monaco content, in full.
+ *
+ * THE MODEL NUMBER IS NOT AN IDENTIFIER. The same five fields render as `inmemory://model/6..10`
+ * on the submission page and `inmemory://model/1..5` on the revise page — the number is just
+ * allocation order. So we do not guess it: we read the `data-uri` that Monaco itself stamped
+ * INSIDE this field's container, then look that uri up in the model list.
+ *
+ * Returns null when the field has no editor, or when window.monaco is unreachable. NULL MEANS
+ * "I DID NOT READ IT" — never "". The caller must treat that as a failure to check, not as an
+ * empty (and therefore clean) report. See below for why that distinction is the whole ballgame.
+ */
+export async function readFieldMonaco(page: Page, fieldKey: string): Promise<string | null> {
+  const field = await resolve_(page, fieldKey);
+  const editor = field.locator("[data-uri]").first();
+  if ((await editor.count()) === 0) return null;
+
+  const uri = await editor.getAttribute("data-uri");
+  if (!uri) return null;
+
+  const models = await readMonaco(page);
+  const hit = models.find((m) => m.uri === uri);
+  return hit ? hit.value : null;
+}
+
+/**
+ * Read the RENDERED lines. The output of this function is EVIDENCE OF FAILURE ONLY.
+ *
+ * It may never be used to conclude that a check passed, and callers must mark anything it
+ * returns as `degraded` so classify() can enforce that. The name says UNSAFE so that a future
+ * reader cannot reach for it casually.
+ *
+ * Why it is unsafe: Monaco virtualizes, so `innerText` returns only the rows currently painted.
+ * The live DOM shows the scale — the Summary field's model is 5408px tall at 19px per line
+ * (~284 lines), and the page contains EIGHT `.view-line` divs. This returns about 3% of the log.
+ *
+ * A truncated CI report whose failures sit below the fold looks exactly like a clean one. If a
+ * "pass" could ever be derived from this, the system would submit a task that Snorkel's own
+ * checks had already failed, and report it green. Hence: fail or pending, never pass.
+ *
+ * It still earns its place. Without it, a page where `window.monaco` is unreachable is a page we
+ * are simply blind on, and a REAL failure sitting in plain sight would go unread until timeout.
+ * Seeing 3% of a failure is worth something. Seeing 3% of a success is worth nothing.
+ */
+export async function readRenderedLinesUNSAFE(page: Page, fieldKey: string): Promise<string> {
   const field = await resolve_(page, fieldKey);
   const editor = field.locator('[role="code"], .monaco-editor').first();
   if ((await editor.count()) === 0) return "";

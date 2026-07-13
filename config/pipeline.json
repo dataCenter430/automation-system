@@ -1,4 +1,9 @@
 {
+  "snorkel": {
+    "$ahtChoices": "'How long did it take you to complete this submission?' \u2014 minutes. A required field whose honest answer we do not have: Snorkel is asking what the task cost a PERSON, and our wall-clock is not that number. The operator supplies the spread and we pick from it at random. It is a spread rather than a constant because the same number on every submission, forever, is itself a signal. A real human revision in the live DOM used 200.",
+    "ahtChoices": [180, 200, 220]
+  },
+
   "paths": {
     "$comment": "${SNORKEL_ROOT} defaults to the repo's parent folder and can be overridden in .env. No absolute paths here \u2014 this system runs on a different machine than it is developed on.",
     "workspace": "${REPO_ROOT}/workspace",

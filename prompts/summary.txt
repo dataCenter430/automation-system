@@ -886,7 +886,7 @@ SECTION 12. WHERE THE DOCS CONTRADICT EACH OTHER (ADJUDICATED — NEWER WINS)
 
   5. GO BASE-IMAGE DIGEST. snorkel_canonical_image_best_practices.md gives
      ...c1ae53890540c06173ea77ac; Dockerfile & Image Best Practices.txt gives
-     ...c1ae53890540ce6173ea77ac (two characters differ).
+     ...c1ae53890540c06173ea77ac (two characters differ).
      RESOLUTION: the canonical-image doc is the designated sanctioned list; its string is
      reproduced in Section 4.1. Verify before relying on it if you build a Go task.
 

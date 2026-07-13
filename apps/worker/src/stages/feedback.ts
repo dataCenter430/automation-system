@@ -18,7 +18,7 @@
  */
 import type { Page } from "playwright";
 import { resolve_ } from "../browser/selectors.ts";
-import { readMonaco, readMonacoFallback, snap } from "../browser/actions.ts";
+import { readMonaco, readRenderedLinesUNSAFE, snap } from "../browser/actions.ts";
 
 export type Verdict = "pass" | "fail" | "pending";
 
@@ -117,8 +117,13 @@ async function readOutput(page: Page): Promise<Output> {
   // The fallback reads RENDERED lines, which Monaco virtualizes, so what we get back is
   // whatever happens to be on screen. Usable as evidence of failure; never as proof of
   // success. See classify().
-  for (const key of ["submission.textSummaryField", "submission.qualityCheckField"]) {
-    const t = await readMonacoFallback(page, key).catch(() => "");
+  for (const key of [
+    "submission.textSummaryField",
+    "submission.qualityCheckField",
+    "submission.agentReviewField",
+    "submission.testQualityReportField",
+  ]) {
+    const t = await readRenderedLinesUNSAFE(page, key).catch(() => "");
     if (t) parts.push(`--- ${key} (RENDERED — MAY BE TRUNCATED) ---\n${t}`);
   }
   return { text: parts.join("\n\n"), degraded: parts.length > 0 };

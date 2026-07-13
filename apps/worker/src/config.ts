@@ -32,6 +32,10 @@ export interface Config {
     /** Open a VS Code window per task workspace, as a viewer (the SDK still drives). */
     openEditor: boolean;
   };
+  snorkel?: {
+    /** Minutes offered for "How long did it take you to complete this submission?". */
+    ahtChoices: number[];
+  };
   gate: {
     requireOracleReward: number; requireNullReward: number;
     requireLintClean: boolean; requireSolveProbeFails: boolean;

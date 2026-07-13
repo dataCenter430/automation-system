@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { Boot } from "./Boot";
 import { usePathname } from "next/navigation";
 import { Notify } from "./Notify";
 import { FleetMeters } from "./FleetMeters";
@@ -200,6 +201,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [owner, setOwner] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
+  /**
+   * The boot screen shows until BOTH first fetches have landed (or failed) — never on a
+   * later poll, and never on a route change. `booted` is one-way.
+   */
+  const [tasksLanded, setTasksLanded] = useState(false);
+  const [fleetLanded, setFleetLanded] = useState(false);
+  const [booted, setBooted] = useState(false);
   const pathname = usePathname();
 
   /**
@@ -230,6 +238,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
       }
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      // "Landed" means we heard back, success or not. A boot screen that waits for SUCCESS
+      // hangs forever on a broken Supabase key and tells you nothing.
+      setTasksLanded(true);
     }
   }, []);
 
@@ -241,6 +253,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
       // A blip on the fleet route must not blank the queue. FleetMeters renders a null
       // fleet as "unknown", which is the honest reading — never as an idle 0/6.
       setFleet(null);
+    } finally {
+      setFleetLanded(true);
     }
   }, []);
 
@@ -270,6 +284,24 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   return (
     <Ctx.Provider value={{ tasks, events, fleet, error, refresh }}>
+      {/*
+        The boot screen. It sits OVER the console rather than instead of it, so the console is
+        already mounted and painted behind the fade — there is no second load when it lifts.
+
+        It shows once, on first mount. Not on a route change, not on a poll: `booted` is
+        one-way. A loading screen you see again every time you click a tab is a bug wearing a
+        costume.
+      */}
+      {!booted && (
+        <Boot
+          fleet={fleet}
+          tasks={tasks}
+          error={error}
+          ready={tasksLanded && fleetLanded}
+          onDone={() => setBooted(true)}
+        />
+      )}
+
       <header
         style={{
           position: "sticky", top: 0, zIndex: 20,

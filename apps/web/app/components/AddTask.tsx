@@ -17,7 +17,8 @@ import { useState } from "react";
  *     AWAITING_APPROVAL and skip the Docker gate entirely. Everything lands at DRAFT.
  */
 
-const MONO = 'ui-monospace, "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace';
+/** The stack is defined once, in layout.tsx. Nothing here re-declares it. */
+const MONO = "var(--mono)";
 
 export function AddTask({ onAdded }: { onAdded: () => void }) {
   const [taskId, setTaskId] = useState("");
@@ -69,7 +70,6 @@ export function AddTask({ onAdded }: { onAdded: () => void }) {
       <label style={S.label} htmlFor="at-uuid">Task UUID</label>
       <input
         id="at-uuid"
-        className="a-in"
         style={S.input}
         value={taskId}
         onChange={(e) => setTaskId(e.target.value)}
@@ -80,7 +80,6 @@ export function AddTask({ onAdded }: { onAdded: () => void }) {
       <label style={{ ...S.label, marginTop: 16 }} htmlFor="at-blob">Task text</label>
       <textarea
         id="at-blob"
-        className="a-in"
         style={{ ...S.input, ...S.area }}
         value={blob}
         onChange={(e) => { setBlob(e.target.value); setPreview(null); }}
@@ -138,8 +137,7 @@ export function AddTask({ onAdded }: { onAdded: () => void }) {
           <label style={{ ...S.label, marginTop: 16 }} htmlFor="at-slug">Slug / zip name</label>
           <input
             id="at-slug"
-            className="a-in"
-            style={{ ...S.input, fontFamily: MONO, fontSize: 12.5 }}
+                style={{ ...S.input, fontFamily: MONO, fontSize: 12.5 }}
             value={slug}
             onChange={(e) => setSlug(e.target.value)}
             spellCheck={false}
@@ -235,11 +233,9 @@ const S: Record<string, React.CSSProperties> = {
   note: { margin: "12px 0 0", fontSize: 12, lineHeight: 1.6, color: "var(--dim)" },
 };
 
+/* Input focus, the disabled state and the reduced-motion kill switch all come from
+   layout.tsx. The only thing this file adds is a hover on its own buttons. */
 const CSS = `
-  .a-in { transition: border-color 120ms ease; }
-  .a-in:focus { outline: none; border-color: var(--violet, #8b5cf6); }
-  .a-btn { transition: filter 120ms ease, opacity 120ms ease; }
-  .a-btn:hover:not(:disabled) { filter: brightness(1.12); }
-  .a-btn:disabled { opacity: .4; cursor: not-allowed; }
-  @media (prefers-reduced-motion: reduce) { .a-in, .a-btn { transition: none; } }
+  .a-btn { transition: filter 120ms ease; }
+  .a-btn:hover:not(:disabled) { filter: brightness(1.14); }
 `;

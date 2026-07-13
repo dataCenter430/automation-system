@@ -99,6 +99,39 @@ test("but actually reaching for a credential is still refused", () => {
   }
 });
 
+test("a recursive delete INSIDE the workspace is housekeeping, not an attack", () => {
+  // The guard used to ban every `rm -rf`. That was a live contradiction: lint's no_tool_caches
+  // rule ORDERS Claude to delete environment/.ruff_cache/, and then the guard refused the
+  // command that does it. It fired for real, mid-fix-turn. A guard that forbids what the gate
+  // demands teaches the model that the guard is noise.
+  for (const cmd of [
+    "rm -rf .ruff_cache",
+    "rm -rf environment/.ruff_cache",
+    "rm -rf tests/__pycache__ tests/.pytest_cache",
+    `rm -rf ${WS}/build`,
+    "rm -rf ./output && make clean",
+  ]) {
+    const r = judge(WS, "Bash", { command: cmd });
+    assert.equal(r.allow, true, `must allow (inside the workspace): ${cmd}\n  ${r.reason}`);
+  }
+});
+
+test("...but a recursive delete outside it, or of it, is still refused", () => {
+  for (const cmd of [
+    "rm -rf /home/pug",
+    "rm -rf ~",
+    "rm -rf ~/.claude",
+    "rm -rf ../other-task",
+    `rm -rf ${WS}`,        // the workspace ITSELF — wipes the build
+    "rm -rf .",            // same thing, spelled differently
+    "rm -rf *",            // a bare glob is never what you meant
+    "rm -rf $SOMEWHERE",   // unresolvable — we do not pretend we can prove it safe
+    "rm -rf",              // no target at all
+  ]) {
+    assert.equal(judge(WS, "Bash", { command: cmd }).allow, false, `must refuse: ${cmd}`);
+  }
+});
+
 test("reading is never the risk — Read/Glob/Grep pass through", () => {
   assert.equal(judge(WS, "Read", { file_path: "/usr/share/doc/x" }).allow, true);
   assert.equal(judge(WS, "Glob", { pattern: "**/*.py" }).allow, true);

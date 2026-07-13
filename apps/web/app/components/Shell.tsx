@@ -199,7 +199,23 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const [fleet, setFleet] = useState<Fleet | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [owner, setOwner] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
   const pathname = usePathname();
+
+  /**
+   * Notify is mounted only after hydration, and that is not a stylistic choice.
+   *
+   * Notify.tsx branches on `typeof Notification === "undefined"` — which is TRUE on the
+   * server (no Notification API in Node) and FALSE in the browser. So it renders nothing
+   * during SSR and a button on the client, and React tears the whole tree down and rebuilds
+   * it: "Hydration failed because the server rendered HTML didn't match the client."
+   *
+   * That regeneration is not cosmetic. It discards client state mid-flight — a row you
+   * clicked in the first moment after load loses its selection, and the gate panel next to
+   * it never opens. Rendering Notify only once we are provably on the client makes both
+   * passes agree, and costs one frame.
+   */
+  useEffect(() => setMounted(true), []);
 
   const refresh = useCallback(async () => {
     try {
@@ -308,7 +324,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
               {fleet?.burnPartial ? " *" : ""}
             </span>
 
-            <Notify tasks={tasks} />
+            {mounted && <Notify tasks={tasks} />}
 
             <a
               href="/settings"

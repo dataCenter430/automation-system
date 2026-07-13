@@ -1,73 +1,61 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { Shell } from "../components/Shell";
 import { AddTask } from "../components/AddTask";
 import { Queue } from "../components/Queue";
+import { useFleetData } from "../components/Shell";
 
 /**
- * TASKS — where a task is born and where a human decides its fate.
+ * TASKS — where a task is born, and where a human decides its fate.
  *
- * Left: NEW TASK. Paste the blob, preview what was parsed, add it as a DRAFT.
- * Right: ALL TASKS, the full table, with the ACTIONS column that carries the two gates
- *        (Start Build on DRAFT, Approve & Submit on AWAITING_APPROVAL) plus Retry, Log and
- *        Session.
+ *   left   NEW TASK   paste the blob → Preview (parses, writes NOTHING) → Add, which lands
+ *                     it as a DRAFT. Inert. The worker will never touch it.
+ *   right  ALL TASKS  the full table, including the ACTIONS column that carries the two
+ *                     gates — Start Build (DRAFT only) and Approve & Submit (AWAITING
+ *                     APPROVAL only, behind a confirm) — plus Retry, Log and Session.
  *
- * The poll is the same 3s poll the dashboard uses — /api/tasks returns every task, its
- * events, and the model/cost/tool-calls read back out of the session transcript on disk.
+ * The shell in layout.tsx already wraps this page: it owns the top bar, the fleet meters,
+ * the desktop notifications and THE poller. So this page renders a body and nothing else,
+ * and reads the tasks the shell has already fetched rather than opening a second 3s poll
+ * against the same rows.
  */
 export default function TasksPage() {
-  const [data, setData] = useState<{ tasks: any[]; events: any[] }>({ tasks: [], events: [] });
-  const [err, setErr] = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    try {
-      const r = await fetch("/api/tasks", { cache: "no-store" });
-      const j = await r.json();
-      if (j.error) setErr(j.error);
-      else { setData(j); setErr(null); }
-    } catch (e) {
-      setErr((e as Error).message);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-    const t = setInterval(refresh, 3000);
-    return () => clearInterval(t);
-  }, [refresh]);
+  const { tasks, events, error, refresh } = useFleetData();
 
   return (
-    <Shell>
+    <>
       <style>{CSS}</style>
 
-      {err && (
-        <div style={{
-          background: "rgba(244,63,94,.07)", border: "1px solid var(--bad)", color: "var(--bad)",
-          padding: "10px 12px", borderRadius: 8, marginBottom: 18,
-          font: '11.5px/1.6 ui-monospace, "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace',
-          whiteSpace: "pre-wrap",
-        }}>
-          {err}
+      {error && (
+        <div
+          className="mono"
+          style={{
+            background: "rgba(244,63,94,.07)", border: "1px solid var(--bad)",
+            color: "var(--bad)", padding: "10px 12px", borderRadius: 8, marginBottom: 16,
+            fontSize: 11.5, lineHeight: 1.6, whiteSpace: "pre-wrap",
+          }}
+        >
+          {error}
         </div>
       )}
 
-      <div className="t-grid">
+      <div className="tasks-grid">
         <AddTask onAdded={refresh} />
-        <Queue tasks={data.tasks} events={data.events} onChanged={refresh} />
+        <Queue tasks={tasks} events={events} onChanged={refresh} />
       </div>
-    </Shell>
+    </>
   );
 }
 
+/* The new-task panel is a fixed rail; the table takes what is left and scrolls inside
+   itself, so the page body never scrolls sideways. */
 const CSS = `
-  .t-grid {
+  .tasks-grid {
     display: grid;
-    grid-template-columns: 380px minmax(0, 1fr);
-    gap: 20px;
+    gap: 18px;
     align-items: start;
+    grid-template-columns: 380px minmax(0, 1fr);
   }
   @media (max-width: 1100px) {
-    .t-grid { grid-template-columns: minmax(0, 1fr); }
+    .tasks-grid { grid-template-columns: minmax(0, 1fr); }
   }
 `;

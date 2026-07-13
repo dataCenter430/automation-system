@@ -32,10 +32,11 @@ const PATH_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
  */
 const SHELL_DENY: Array<{ re: RegExp; why: string }> = [
   { re: /\bsudo\b|\bdoas\b|\bpkexec\b/, why: "runs as root" },
-  // Recursive delete only. A plain `rm -f build.log` is ordinary and must stay allowed —
-  // blocking it just teaches the model to work around the guard.
-  { re: /\brm\b[^|;&]*\s-\w*r/i, why: "is a recursive delete" },
-  // ...and any rm aimed at the root, the home directory, or a bare glob of one.
+  // NOTE: recursive delete is NOT here. It is handled by rmIsContained(), because whether an
+  // `rm -rf` is fine depends entirely on WHAT it deletes — and a flat ban was a live
+  // contradiction: lint's no_tool_caches rule tells Claude "delete environment/.ruff_cache/",
+  // and then the guard refused `rm -rf .ruff_cache`. A guard that forbids the thing the gate
+  // demands teaches the model that the guard is noise to be routed around.
   { re: /\brm\b[^|;&]*\s+(\/|~|\$HOME)(\s|\/?\*|$)/, why: "deletes from / or your home directory" },
   { re: /\bmkfs\b|\bdd\s+if=|\bshred\b/, why: "destroys a filesystem or device" },
   { re: /\bchown\b|\bchmod\s+(-\w+\s+)*777\b/, why: "changes ownership/permissions broadly" },
@@ -81,6 +82,50 @@ const PROTECTED = [
  * one of these names a protected path precisely in order to stay away from it. Matching the
  * raw string cannot tell "read this" from "skip this", and the difference is the whole point.
  */
+/**
+ * Is every target of a recursive `rm` inside the task workspace?
+ *
+ * Deleting a directory is not dangerous; deleting the WRONG directory is. So judge the target,
+ * not the flag. `rm -rf .ruff_cache` inside the workspace is housekeeping — and lint now
+ * explicitly ORDERS it ("delete it, and run linters with --no-cache"). `rm -rf ~/Documents` is
+ * not, and never will be.
+ *
+ * Two things are refused even inside the workspace: the workspace root itself, and a bare glob
+ * (`rm -rf *`). Both wipe the build, and neither is ever the thing you meant.
+ *
+ * Returns null when the command is not a recursive rm at all (nothing to say), true/false
+ * otherwise.
+ */
+function rmIsContained(workspace: string, cmd: string): boolean | null {
+  // Recursive only. `rm -f build.log` is ordinary and never came near this.
+  if (!/\brm\b[^|;&]*\s-\w*r/i.test(cmd)) return null;
+
+  const ws = resolve(workspace);
+
+  // Take the rm clause only — a compound command may legitimately do other things after it.
+  const clause = /\brm\b([^|;&]*)/i.exec(cmd)?.[1] ?? "";
+  const args = clause
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((a) => !a.startsWith("-")); // drop flags
+
+  if (args.length === 0) return false; // `rm -rf` with no target: refuse, it means nothing good
+
+  for (const raw of args) {
+    const a = raw.replace(/^['"]|['"]$/g, "");
+    // A glob that could expand to anything, or a shell variable we cannot resolve, is not
+    // something we can prove is contained — so we do not pretend we can.
+    if (a === "*" || a === "." || a === ".." || a.startsWith("$")) return false;
+
+    const abs = isAbsolute(a) ? a : resolve(ws, a);
+    const rel = relative(ws, resolve(abs));
+    if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return false; // the ws itself, or outside it
+    if (touchesProtected(a)) return false;
+  }
+  return true;
+}
+
 function stripExclusions(cmd: string): string {
   return cmd
     .replace(/--exclude(-dir)?[= ]\s*(['"]?)[^\s'"]+\2/g, " ")
@@ -133,6 +178,19 @@ export function judge(workspace: string, toolName: string, input: Record<string,
     const raw = String(input.command ?? "");
     // A path named in order to be SKIPPED is not a path being touched. See stripExclusions().
     const cmd = stripExclusions(raw);
+
+    // Recursive delete is judged by its TARGET, not by its flag.
+    const contained = rmIsContained(workspace, cmd);
+    if (contained === false) {
+      return {
+        allow: false,
+        reason:
+          `Refused: that recursive delete is not confined to the task workspace. You may ` +
+          `\`rm -rf\` inside ${workspace} (deleting a stray cache directory, for instance), but ` +
+          `not the workspace itself, not a bare glob, and nothing outside it.`,
+      };
+    }
+
     for (const { re, why } of SHELL_DENY) {
       if (re.test(cmd)) {
         return {

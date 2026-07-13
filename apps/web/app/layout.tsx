@@ -104,7 +104,10 @@ a { color: inherit; }
 .rail { grid-area: rail; min-width: 0; }
 .main { grid-area: main; min-width: 0; }
 .gate { grid-area: gate; min-width: 0; }
-@media (max-width: 1280px) {
+/* 264 rail + 340 gate + gaps + padding = ~676px of furniture; below ~1150 the centre column
+   stops being wide enough to hold the table, so the gate drops under it rather than
+   squeezing the thing you are actually reading. A 1280px laptop keeps all three. */
+@media (max-width: 1150px) {
   .grid { grid-template-columns: 264px minmax(0, 1fr); grid-template-areas: "rail main" "gate gate"; }
 }
 @media (max-width: 900px) {

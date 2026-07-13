@@ -86,17 +86,19 @@ export function Queue({
           className="scroll-x"
           style={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 10 }}
         >
-          <table style={{ width: "100%", minWidth: 1020, borderCollapse: "collapse" }}>
+          {/* The fixed columns sum to ~990, so TITLE keeps a usable share at ordinary widths and
+              the table only scrolls inside itself on a genuinely narrow screen. */}
+          <table style={{ width: "100%", minWidth: 1120, borderCollapse: "collapse", tableLayout: "fixed" }}>
             <colgroup>
-              <col style={{ width: 190 }} />
+              <col style={{ width: 170 }} />
               <col />
-              <col style={{ width: 168 }} />
-              <col style={{ width: 104 }} />
-              <col style={{ width: 128 }} />
-              <col style={{ width: 58 }} />
-              <col style={{ width: 74 }} />
-              <col style={{ width: 82 }} />
-              <col style={{ width: 296 }} />
+              <col style={{ width: 158 }} />
+              <col style={{ width: 92 }} />
+              <col style={{ width: 134 }} />
+              <col style={{ width: 52 }} />
+              <col style={{ width: 68 }} />
+              <col style={{ width: 76 }} />
+              <col style={{ width: 254 }} />
             </colgroup>
 
             <thead>
@@ -425,7 +427,7 @@ function Expand({ color, children }: { color: string; children: React.ReactNode 
 
 const B: React.CSSProperties = {
   padding: "5px 10px", borderRadius: 6, cursor: "pointer", whiteSpace: "nowrap",
-  fontFamily: 'ui-monospace, "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace',
+  fontFamily: "var(--mono)",
   fontSize: 10, lineHeight: 1, letterSpacing: "0.06em", textTransform: "uppercase",
 };
 

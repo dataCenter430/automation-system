@@ -335,6 +335,9 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
           },
         });
         // Straight back to the gate. The gate, not Claude, decides whether it is fixed.
+        // The task tree just changed, so anything derived from it is stale — including the
+        // three submission explanations. See the note at REMOTE_FIX_RUNNING below.
+        patchState(ws, { explanations: null });
         await transition(ctx, row, ws, S.VERIFY_RUNNING, { stage: "fix", message: "fix applied — re-verifying" });
       } catch (e) {
         if (e instanceof RateLimited) throw e;
@@ -558,9 +561,19 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
 
         // Back through the LOCAL gate before re-uploading. A fix that satisfies Snorkel's
         // CI can quietly break the oracle, and uploading that would waste a whole lap.
-        patchState(ws, { attempt: 0 });
+        //
+        // And throw away the explanations. They are DERIVED from the task tree, and the task
+        // tree just changed — sometimes completely. This nearly shipped: Snorkel rejected our
+        // first task because a classifier read it as `debugging`, the fix turn redesigned the
+        // task from "five defects are planted in this C++ file, find them" into a feature-store
+        // rematerialization with no defects at all — and the EXPLAINED stage would have skipped
+        // regeneration (`if (s.explanations) …`) and uploaded the OLD explanations, which open
+        // with "I planted five defects in the C++ code", as the description of a task that no
+        // longer has any. A stale explanation is worse than a missing one: it is a confident,
+        // fluent lie about what you built, in your own voice, submitted under your name.
+        patchState(ws, { attempt: 0, explanations: null });
         await transition(ctx, row, ws, S.VERIFY_RUNNING, {
-          stage: "fix", message: "re-verifying locally before re-upload",
+          stage: "fix", message: "re-verifying locally before re-upload · explanations invalidated",
         });
       } catch (e) {
         if (e instanceof RateLimited) throw e;

@@ -29,7 +29,24 @@ import { fileURLToPath } from "node:url";
 import { lintTask, type Finding } from "../../../apps/worker/src/stages/lint.ts";
 
 const REPO = fileURLToPath(new URL("../../../", import.meta.url));
-const REAL = join(REPO, "workspace", "migrate-imagemagick-textile-features-with-c-sqlite");
+
+/**
+ * A FROZEN copy of the exact task tree Snorkel rejected — not the live workspace.
+ *
+ * These tests originally lint()ed workspace/migrate-imagemagick-textile-features-with-c-sqlite
+ * directly, on the reasoning that the best regression subject is the real thing. That was
+ * wrong, and it broke within the hour: the pipeline fed Snorkel's verdict back into the build
+ * session, Claude redesigned the task, and four tests went red — not because the gate had
+ * regressed, but because the system had done its job and fixed the very tree the tests were
+ * asserting was broken.
+ *
+ * A test whose subject is a directory the system under test rewrites is not a test. The tree
+ * is checked in here, extracted from the zip that was actually submitted and actually
+ * rejected, so it can never be fixed out from under us. (The 222 KB dossier is stubbed: lint
+ * never reads its contents, but the file must EXIST, because environment/ holding 6 files is
+ * exactly what makes codebase_size = "small" wrong.)
+ */
+const REAL = join(REPO, "packages", "shared", "test", "fixtures", "rejected-submission");
 
 /** Is ruff runnable here at all? Mirrors ruffRunner()'s search order. */
 function ruffAvailable(): boolean {

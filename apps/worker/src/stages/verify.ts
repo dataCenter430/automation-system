@@ -15,6 +15,7 @@ import { join } from "node:path";
 import * as docker from "../docker/runner.ts";
 import { lintTask, formatFindings, type Finding } from "./lint.ts";
 import { normalizeLineEndings } from "../util/lf.ts";
+import { classifyTask, classifierFailure } from "./classify.ts";
 
 export interface VerifyResult {
   passed: boolean;
@@ -35,6 +36,10 @@ export interface VerifyOptions {
   buildTimeoutSec: number;
   solveTimeoutSec: number;
   testTimeoutSec: number;
+  /** Run the category classifier (the check that rejected our first submission). */
+  classify?: boolean;
+  /** Snorkel's CI announces REVIEW_MODEL="claude-haiku-4-5"; we ask the same model. */
+  classifierModel?: string;
   /** Skip the null run when you only want a fast pass/fail (not for the real gate). */
   skipNullRun?: boolean;
 }
@@ -97,6 +102,66 @@ export async function verifyTask(opts: VerifyOptions): Promise<VerifyResult> {
         `STAGE: static lint (no Docker was run)\n\n${formatFindings(lint.findings)}\n\n` +
         `Fix every BLOCKING finding above. Each names one rule and one file.`,
     };
+  }
+
+  // 2. CATEGORY CLASSIFIER — the check that actually rejected our first submission.
+  //
+  // Snorkel passed the enum ("✅ Category 'machine-learning' is valid") and rejected the task
+  // in the same run ("❌ Predicted category 'software-engineering' (0.95) is blocked"). Both
+  // were true: the label was legal, the task was not. A string compare cannot catch that, so
+  // we ask the same model Snorkel's CI announces it uses — REVIEW_MODEL="claude-haiku-4-5" —
+  // the same question, before we ever upload.
+  //
+  // Before Docker: this costs seconds, and a task that is blocked in substance should not
+  // spend six minutes building an image first.
+  if (opts.classify !== false) {
+    const c = await classifyTask(taskDir, opts.classifierModel);
+
+    if (c.unavailable) {
+      // Never silently pass. A gate that reports clean because it could not run its check is
+      // exactly how 14 ruff errors reached Snorkel.
+      lint.findings.push({
+        rule: "category_classifier",
+        severity: "warning",
+        file: "task.toml",
+        message:
+          `Could not run the category classifier, so this task is NOT protected against the ` +
+          `check that rejected our first submission. ${c.unavailable}`,
+      });
+    } else if (c.blocked) {
+      const declared = (() => {
+        try {
+          const t = readFileSync(join(taskDir, "task.toml"), "utf8");
+          return /category\s*=\s*"([^"]+)"/.exec(t)?.[1] ?? "(unknown)";
+        } catch {
+          return "(unknown)";
+        }
+      })();
+
+      lint.findings.push({
+        rule: "predicted_category_blocked",
+        severity: "blocking",
+        file: "task.toml",
+        message: `classifies as "${c.predicted}" (${c.confidence.toFixed(2)}) — a blocked category. ${c.why}`,
+      });
+
+      return {
+        passed: false,
+        oracleReward: null,
+        nullReward: null,
+        lint,
+        logsDir: runDir,
+        failureReport:
+          `STAGE: category classifier (no Docker was run)\n\n` +
+          classifierFailure(c, declared),
+      };
+    } else {
+      writeFileSync(
+        join(runDir, "classifier.json"),
+        JSON.stringify(c, null, 2),
+        "utf8",
+      );
+    }
   }
 
   await docker.assertDaemonUp();

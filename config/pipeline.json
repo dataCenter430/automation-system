@@ -1,34 +1,33 @@
 {
   "paths": {
-    "$comment": "${SNORKEL_ROOT} defaults to the repo's parent folder and can be overridden in .env. No absolute paths here — this system runs on a different machine than it is developed on.",
+    "$comment": "${SNORKEL_ROOT} defaults to the repo's parent folder and can be overridden in .env. No absolute paths here \u2014 this system runs on a different machine than it is developed on.",
     "workspace": "${REPO_ROOT}/workspace",
     "runs": "${REPO_ROOT}/runs",
     "zipOutput": "${SNORKEL_ROOT}/Working",
     "documentation": "${SNORKEL_ROOT}/documentation"
   },
-
   "retries": {
     "$comment": "Two independent fix loops. verify = local Docker gate. feedback = Snorkel's own static checks.",
     "verifyAttempts": 3,
     "feedbackAttempts": 3,
     "explainAttempts": 3
   },
-
   "claude": {
     "$comment": "Auth comes from the logged-in Claude Code CLI (~/.claude), NOT an API key. The Agent SDK spawns that CLI, so the worker must run as the OS user that is signed in.",
-    "$maxConcurrent": "How many Claude sessions may run at once. Build turns are network-bound, so several overlap happily on a 4-core box — this protects the SUBSCRIPTION rate limit, not the CPU. It was declared here from the start and read by NO code until claude/session.ts started enforcing it.",
+    "$maxConcurrent": "How many Claude sessions may run at once. Build turns are network-bound, so several overlap happily on a 4-core box \u2014 this protects the SUBSCRIPTION rate limit, not the CPU. It was declared here from the start and read by NO code until claude/session.ts started enforcing it.",
     "maxConcurrent": 6,
-    "$model": "The model every build runs on. null = inherit whatever the Claude Code CLI defaults to — which is NOT a choice: the first real build silently ran on claude-opus-4-5-20251101 because the bare 'opus' alias resolves there, and nothing recorded it. Probed on this subscription: 'claude-opus-4-5' -> 4.5, 'claude-opus-4-8' -> 4.8, 'opus' -> 4.5. Pinned to 4.8 as the most capable: a better model writes better tasks, which means fewer gate failures and fewer Claude attempts burned on fixes. The model that ACTUALLY ran is captured from the SDK's init message and shown per task in the dashboard, so a pin that silently stops working is visible rather than assumed.",
+    "$model": "The model every build runs on. null = inherit whatever the Claude Code CLI defaults to \u2014 which is NOT a choice: the first real build silently ran on claude-opus-4-5-20251101 because the bare 'opus' alias resolves there, and nothing recorded it. Probed on this subscription: 'claude-opus-4-5' -> 4.5, 'claude-opus-4-8' -> 4.8, 'opus' -> 4.5. Pinned to 4.8 as the most capable: a better model writes better tasks, which means fewer gate failures and fewer Claude attempts burned on fixes. The model that ACTUALLY ran is captured from the SDK's init message and shown per task in the dashboard, so a pin that silently stops working is visible rather than assumed.",
     "model": "claude-opus-4-8",
-    "$buildTimeout": "A long_context task must ship >= 50k tokens of real prose (playbook §8.6). Claude writes that corpus by hand, which is slow: the first build under the SDK engine spent 45 minutes producing a 222 KB dossier and was killed before it could build the task on top of it. 45 was never enough for this category.",
+    "$buildTimeout": "A long_context task must ship >= 50k tokens of real prose (playbook \u00a78.6). Claude writes that corpus by hand, which is slow: the first build under the SDK engine spent 45 minutes producing a 222 KB dossier and was killed before it could build the task on top of it. 45 was never enough for this category.",
     "studyTimeoutMin": 15,
     "buildTimeoutMin": 120,
     "fixTimeoutMin": 45,
     "explainTimeoutMin": 15,
     "probeTimeoutMin": 30,
-    "rateLimitBackoffSec": 120
+    "rateLimitBackoffSec": 120,
+    "$classifierModel": "Snorkel's CI build log literally prints: export REVIEW_MODEL=\"claude-haiku-4-5\". So the gate asks the SAME model the SAME question before we upload. That is the difference between a gate that approximates Snorkel and one that agrees with it.",
+    "classifierModel": "claude-haiku-4-5"
   },
-
   "docker": {
     "$comment": "Mirrors task.toml [environment]; --network none reproduces allow_internet=false at test time.",
     "$maxConcurrentGates": "cpus * maxConcurrentGates must not exceed the machine's cores. This box has 4, so 2 gates x 2 cpus fits exactly. Raise BOTH together only on a bigger machine: over-subscribing here does not make anything faster, it makes every gate time out at once and records real task failures that were only a scheduling mistake.",
@@ -39,21 +38,18 @@
     "solveTimeoutSec": 900,
     "testTimeoutSec": 600
   },
-
   "feedback": {
-    "$comment": "Check feedback runs server-side and takes a while. This is a POLL, not a blocking wait — the worker interleaves other tasks between polls.",
+    "$comment": "Check feedback runs server-side and takes a while. This is a POLL, not a blocking wait \u2014 the worker interleaves other tasks between polls.",
     "pollIntervalSec": 30,
     "timeoutMin": 20
   },
-
   "worker": {
-    "$maxParallelTasks": "Tasks in flight at once. This is NOT the Claude limit or the Docker limit — those queue separately (claude.maxConcurrent, docker.maxConcurrentGates), because a build turn waits on the network while a gate eats two cores. 8 tasks / 6 Claude sessions / 2 gates.",
-    "$openEditor": "Open a VS Code window on each task's workspace so the build can be watched in an editor. VS Code is a VIEWER here, not the driver — the SDK runs the build. It works because the SDK writes its session into ~/.claude/projects/<workspace>/, the SAME store the VS Code Claude extension reads for that folder, so the extension's Claude panel shows this build's own conversation. Set false for a headless machine (a missing `code` binary never fails a build; you just lose the window).",
+    "$maxParallelTasks": "Tasks in flight at once. This is NOT the Claude limit or the Docker limit \u2014 those queue separately (claude.maxConcurrent, docker.maxConcurrentGates), because a build turn waits on the network while a gate eats two cores. 8 tasks / 6 Claude sessions / 2 gates.",
+    "$openEditor": "Open a VS Code window on each task's workspace so the build can be watched in an editor. VS Code is a VIEWER here, not the driver \u2014 the SDK runs the build. It works because the SDK writes its session into ~/.claude/projects/<workspace>/, the SAME store the VS Code Claude extension reads for that folder, so the extension's Claude panel shows this build's own conversation. Set false for a headless machine (a missing `code` binary never fails a build; you just lose the window).",
     "pollIntervalSec": 5,
     "maxParallelTasks": 8,
     "openEditor": true
   },
-
   "gate": {
     "$comment": "All four must hold before a task may be uploaded. oracle-passes alone proves nothing.",
     "requireOracleReward": 1,

@@ -15,7 +15,8 @@
     "preflight": "node --experimental-strip-types apps/worker/src/preflight.ts",
     "verify:task": "node --experimental-strip-types apps/worker/src/cli/verify-task.ts",
     "summary:build": "node --experimental-strip-types scripts/build-summary.ts",
-    "selectors:record": "node --experimental-strip-types apps/worker/src/browser/record.ts"
+    "selectors:record": "node --experimental-strip-types apps/worker/src/browser/record.ts",
+    "feedback:fix": "node --experimental-strip-types scripts/feedback-fix.ts"
   },
   "devDependencies": {
     "@types/archiver": "^6.0.4",

@@ -11,6 +11,8 @@ export interface Config {
     probeTimeoutMin: number; rateLimitBackoffSec: number;
     /** null = inherit the CLI default (and you will not know what it is). */
     model: string | null;
+    /** The model the category classifier uses. Snorkel's CI announces REVIEW_MODEL="claude-haiku-4-5". */
+    classifierModel: string;
   };
   docker: {
     cpus: number; memoryMb: number; buildTimeoutSec: number;

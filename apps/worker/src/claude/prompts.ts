@@ -75,10 +75,57 @@ Non-negotiables, checked mechanically the moment you claim to be done:
 6. tests/test.sh must end with the canonical reward block, exactly, with no comment or
    blank line between \`RC=$?\` and the \`if\`, and no trailing \`exit "$RC"\`.
 7. All files that run in the container (*.sh, *.py, Dockerfile) must use LF line endings.
-8. The \`category\` in task.toml is given to you already resolved. Use it verbatim. Snorkel is
-   NOT currently accepting \`software-engineering\`, \`debugging\`, or \`data-processing\` — never
-   substitute one of those, and do not shape the task so that it would obviously belong to
-   one of them.
+
+8. CATEGORY IS SUBSTANCE, NOT LABEL. This is the rule that gets tasks rejected.
+   The category is decided by an LLM CLASSIFIER THAT READS THE TASK'S CONTENT — instruction.md,
+   the source you ship, solve.sh, the test names. It NEVER reads task.toml. Snorkel BLOCKS
+   \`software-engineering\`, \`debugging\` and \`data-processing\`: if the classifier puts your task
+   in one of those, it is rejected outright no matter what the enum says. Use the \`category\`
+   you were given verbatim in task.toml AND make the task genuinely be that category.
+
+   GATE, before you write a line of instruction.md. Complete in <=15 words:
+     "The agent must produce ___, judged correct by ___."
+   If that reads "a corrected source file" / "the previously-wrong behaviour is now right",
+   you have designed a debugging task. STOP and redesign the substance.
+
+   BANNED — never in instruction.md, the title, shipped source comments, solve.sh or test names:
+   - "there are N bugs/defects", "fix the broken X", "X produces wrong/incorrect output",
+     "something is off", "I wouldn't trust the other calculations", "debug/root-cause/track down",
+     "make the failing tests pass"
+   - planted-defect comments in shipped source (\`// DEFECT #1: WRONG — should be 45\`). They also
+     leak the oracle and void \`long_context\`.
+   - an oracle that is \`sed\` one-liners over constants, or a diff that only flips literals and
+     operators.
+
+   REQUIRED INSTEAD. Nothing in the environment is ever *in error*. Pre-existing values are
+   legitimately correct for a prior version or configuration (a v2 spec, an old calibration);
+   the agent DERIVES the current definition from the shipped specification and BUILDS the current
+   artifact. Success is stated in the assigned category's own terms — for machine-learning:
+   features, cohorts, class balance, drift/PSI, calibration, thresholds, lineage, reproducibility;
+   never "the code is now correct". Domain nouns in the environment (a "classifier", a "feature
+   store") are set dressing: the classifier reads the agent's DELIVERABLE and the GRADING
+   criteria. Implementation language is irrelevant — 600 lines of C++ that build a feature
+   pipeline is machine-learning in C++; six seds over constants is debugging in any domain.
+   \`long_context\` payload must be a specification the agent implements, never a hiding place
+   for a bug, and never shortcut-able by comments in the shipped source.
+
+   SELF-CHECK before you finish: read instruction.md ALONE — no task.toml, no tags — and answer
+   "which single category is this, at what confidence?". If it is not the assigned category at
+   high confidence, or is a blocked category at any confidence, the task is NOT shippable.
+   Iterate on the deliverables and the instruction, never on the metadata.
+
+9. instruction.md states WHAT correct behaviour is and its acceptance criteria — never HOW to
+   build or test. No "rebuild with \`make\`", no "set VAR=...", no step-by-step developer workflow,
+   no test commands. Specify required outputs: exact paths, formats, values, tolerances. Build
+   and verification procedure belongs in tests/ and the Dockerfile, not in the prompt.
+
+10. Every Python file in the zip must be ruff-clean: no unused imports (F401), no f-string
+    without a placeholder (F541), no unused variables (F841). Run \`ruff check tests/\` yourself
+    before you claim done. Ship no scratch/helper scripts — they get linted too.
+
+11. codebase_size must match the ACTUAL file count under environment/, excluding Dockerfile and
+    docker-compose: <=20 files -> "minimal", 20+ -> "small", 200+ -> "large". Count it
+    (\`find environment -type f | grep -v Dockerfile | wc -l\`); never guess.
 
 Never claim the task is finished on the basis of code that looks right. Build the image,
 run the oracle, run the tests, and read the reward file. A false "verified green" is the

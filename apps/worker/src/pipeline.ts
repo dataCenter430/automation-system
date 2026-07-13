@@ -272,6 +272,7 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
           buildTimeoutSec: cfg.docker.buildTimeoutSec,
           solveTimeoutSec: cfg.docker.solveTimeoutSec,
           testTimeoutSec: cfg.docker.testTimeoutSec,
+          classifierModel: cfg.claude.classifierModel,
         }),
       );
 

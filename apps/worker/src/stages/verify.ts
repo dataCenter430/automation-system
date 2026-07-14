@@ -16,6 +16,7 @@ import * as docker from "../docker/runner.ts";
 import { lintTask, formatFindings, type Finding } from "./lint.ts";
 import { normalizeLineEndings } from "../util/lf.ts";
 import { classifyTask, classifierFailure } from "./classify.ts";
+import { instructionGate, formatInstructionVerdict } from "./instruction-gate.ts";
 
 export interface VerifyResult {
   passed: boolean;
@@ -38,6 +39,10 @@ export interface VerifyOptions {
   testTimeoutSec: number;
   /** Run the category classifier (the check that rejected our first submission). */
   classify?: boolean;
+  /** Run the instruction gate — the guide's rules, plus "does this read as machine-written?". */
+  instructionGate?: boolean;
+  /** The style judge inside it costs one haiku call. Off = mechanical checks only. */
+  styleJudge?: boolean;
   /** Snorkel's CI announces REVIEW_MODEL="claude-haiku-4-5"; we ask the same model. */
   classifierModel?: string;
   /** Skip the null run when you only want a fast pass/fail (not for the real gate). */
@@ -161,6 +166,47 @@ export async function verifyTask(opts: VerifyOptions): Promise<VerifyResult> {
         JSON.stringify(c, null, 2),
         "utf8",
       );
+    }
+  }
+
+  // 3. THE INSTRUCTION GATE — does the prompt read like a HUMAN wrote it?
+  //
+  // Snorkel's instruction guide: "Prompts should NOT be LLM-generated. We want to avoid the
+  // 'GPT-style' of writing (verbose, repetitive, and overly polite)." The Review Checklist marks
+  // every instruction criterion HIGH severity — one failure and the task is not accepted. So a
+  // task whose instruction reads like documentation is dead on arrival, however good the
+  // engineering underneath it.
+  //
+  // This check EXISTED (lintInstruction) and ran in exactly one place: upload.ts, deciding whether
+  // we could honestly tick the "Prompt Check" box. That is far too late — by then we have paid for
+  // the build, the image, the oracle run, the null run and the zip, and the fix loop never sees it
+  // because the gate said the task was fine.
+  //
+  // So it runs HERE, before Docker, next to the classifier and for the same reason: it is cheap,
+  // it is about SUBSTANCE, and a task that fails it should not spend six minutes building an image.
+  if (opts.instructionGate !== false) {
+    const g = await instructionGate(taskDir, { judge: opts.styleJudge !== false });
+
+    writeFileSync(join(runDir, "instruction.json"), JSON.stringify(g, null, 2), "utf8");
+
+    for (const f of g.findings) {
+      lint.findings.push({
+        rule: f.rule,
+        severity: f.severity,
+        file: "instruction.md",
+        message: f.evidence ? `${f.message}\n     evidence: ${f.evidence}` : f.message,
+      });
+    }
+
+    if (!g.ok) {
+      return {
+        passed: false,
+        oracleReward: null,
+        nullReward: null,
+        lint,
+        logsDir: runDir,
+        failureReport: formatInstructionVerdict(g),
+      };
     }
   }
 

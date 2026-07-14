@@ -13,9 +13,18 @@
   },
   "retries": {
     "$comment": "Two independent fix loops. verify = local Docker gate. feedback = Snorkel's own static checks.",
-    "verifyAttempts": 3,
-    "feedbackAttempts": 3,
-    "explainAttempts": 3
+
+    "$unlimited": "0 means NO CAP — keep fixing until the task passes. The operator's rule: 'do not set retry max as 3, it should re-try until the task is completed successfully.' They are right: a cap turns a task that needed five attempts into a dead task, and the work already spent is thrown away. A build that is making progress should not be killed by a counter.",
+
+    "$butNotForever": "Unlimited is not the same as blind. An infinite loop on a task that CANNOT be fixed would burn the subscription's rate limit for nothing, and rate limit is the one thing this system actually spends. So the loop stops when it stops MAKING PROGRESS: if the gate fails the same way `stuckAfterIdenticalFailures` times in a row, the task does not fail — it ASKS YOU (see claude/ask.ts). A machine that is going in circles should say so, not keep going.",
+
+    "verifyAttempts": 0,
+    "feedbackAttempts": 0,
+    "explainAttempts": 3,
+
+    "$explainAttempts": "Explanations DO keep a cap. They are a style-validator loop over prose, not a task rebuild — if three attempts cannot produce explanations that read like a human wrote them, a fourth will not either, and there is nothing to make progress ON.",
+
+    "stuckAfterIdenticalFailures": 3
   },
   "claude": {
     "$comment": "Auth comes from the logged-in Claude Code CLI (~/.claude), NOT an API key. The Agent SDK spawns that CLI, so the worker must run as the OS user that is signed in.",

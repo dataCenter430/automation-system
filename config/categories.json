@@ -1,0 +1,85 @@
+{
+  "$comment": "WHAT EACH CATEGORY ACTUALLY IS — the deliverable, and what it is graded on. This is the only thing that decides the classifier's verdict; task.toml's `category` field is never read by it. Used by stages/classify.ts to tell a build session what its assigned category REQUIRES, and by prompts/08-redesign.md when a task has to be rebuilt.",
+
+  "$whyThisFileExists": "The classifier's failure message used to end with hardcoded MACHINE-LEARNING advice — 'to belong to X, the deliverable and grading must be about MODEL BEHAVIOUR: precision/recall, calibration, an operating threshold' — with X substituted in. So a SECURITY task that got blocked was told to go and calibrate a model. If Claude had obeyed, the task would have become machine-learning while task.toml said security, and been rejected the other way. The advice has to be per-category or it is worse than none.",
+
+  "$theOneRule": "THE CLASSIFIER READS THE DELIVERABLE AND THE GRADING. Not the domain, not the vocabulary, not the enum. 'What must the agent produce, and what decides whether it is right?' Answer that in the wrong words and the task is rejected no matter how much of the right domain furniture is standing around it.",
+
+  "security": {
+    "deliverable": "A TRUST DECISION, enforced. The agent produces a system that correctly REFUSES what it should refuse — a forged signature, a revoked key, a replayed nonce, an expired window, an unauthorized principal, a tampered artifact.",
+    "gradedOn": "ADVERSARIAL OUTCOMES. Does the attack get stopped? Each test IS an attack: present forged evidence and the verifier must reject it; present a revoked key and it must reject it; replay a valid-but-stale token and it must reject it. The oracle is 'the policy holds under attack', never 'the output file matches the golden copy'.",
+    "testNamesLikeThis": [
+      "test_forged_signature_is_rejected",
+      "test_revoked_key_is_rejected",
+      "test_replayed_nonce_is_rejected",
+      "test_expired_window_is_rejected",
+      "test_unpinned_certificate_is_rejected",
+      "test_valid_evidence_is_accepted"
+    ],
+    "notThis": "test_output_json_matches_golden / test_report_shape_is_correct / test_determinism. Those grade an OUTPUT, which is data-processing (or software-engineering if the output is a source file). A security task that is graded on whether the JSON is byte-identical is a data-processing task wearing a lanyard.",
+    "theTrap": "The agent must not be asked to FIX a broken verifier — that is debugging. It must be asked to BUILD one that holds. Ship a verifier that is honestly incomplete against a THREAT MODEL the agent is given, and grade it on which attacks it now stops."
+  },
+
+  "system-administration": {
+    "deliverable": "A SYSTEM IN A CORRECT OPERATIONAL STATE. Services running under the right constraints, configuration applied, permissions and quotas enforced, a machine that behaves correctly under operation.",
+    "gradedOn": "THE OBSERVABLE STATE OF THE SYSTEM, probed from outside. Is the service reachable on the right socket, does it survive a restart, is the resource limit actually enforced, does the rotation happen. Not 'the config file has the right contents' — that is a data-processing grade on a config-shaped output.",
+    "testNamesLikeThis": [
+      "test_service_survives_restart",
+      "test_memory_limit_is_enforced",
+      "test_unprivileged_user_cannot_bind_port",
+      "test_log_rotation_fires_at_threshold"
+    ],
+    "notThis": "test_config_file_matches_expected",
+    "theTrap": "Grading the CONFIG rather than the BEHAVIOUR the config is supposed to produce."
+  },
+
+  "build-and-dependency-management": {
+    "deliverable": "A BUILD THAT RESOLVES AND REPRODUCES. A dependency graph that can be satisfied offline, a lockfile that pins what it claims to, a build whose output does not move between runs.",
+    "gradedOn": "PROPERTIES OF THE RESOLVED GRAPH AND THE BUILD. Does it resolve at all with no network; is the resolution deterministic; is the version constraint actually satisfiable; do two builds produce the same artifact.",
+    "testNamesLikeThis": [
+      "test_resolves_offline",
+      "test_lockfile_pins_every_transitive_dep",
+      "test_two_builds_produce_identical_artifact",
+      "test_conflicting_constraint_is_reported_not_silently_resolved"
+    ],
+    "notThis": "test_source_file_compiles (that is software-engineering), and test_lockfile_matches_golden — grading the lockfile's CONTENTS is data-processing on a lockfile-shaped output. Grade the PROPERTY the lockfile is supposed to have (it resolves offline; two resolutions agree; every transitive dep is pinned), never the bytes.",
+    "theTrap": "'The build was broken, fix it' is debugging. 'Make this build reproducible/offline/deterministic, here is the constraint' is build-and-dependency-management. And do not grade the output artifact — grade whether the build has the property."
+  },
+
+  "machine-learning": {
+    "deliverable": "A STATEMENT ABOUT MODEL BEHAVIOUR. A trained or evaluated or calibrated model — and the number that describes how it behaves.",
+    "gradedOn": "MODEL QUALITY METRICS. Precision, recall, PR-AUC, a confusion matrix at a chosen threshold, calibration error, an operating point that hits a stated target.",
+    "testNamesLikeThis": [
+      "test_threshold_achieves_recall_0_95",
+      "test_pr_auc_above_baseline",
+      "test_confusion_matrix_at_threshold_matches_reference"
+    ],
+    "notThis": "test_output_table_matches_spec. BUILDING A FEATURE PIPELINE IS NOT MACHINE LEARNING — it is data-processing, and data-processing is BLOCKED. Materialising a feature store, computing features to a spec, migrating a table between schema versions, even computing drift over two datasets: every one of those is graded on whether the OUTPUT DATA is correct, and that is ETL.",
+    "theTrap": "Machine-learning VOCABULARY around an ETL deliverable. The classifier reads the deliverable."
+  },
+
+  "games": {
+    "deliverable": "AN AGENT OR ENGINE THAT PLAYS. Something that makes legal moves and wins, or a solver that finds the optimum.",
+    "gradedOn": "GAME OUTCOMES. Win/draw rate against a fixed opponent, move legality, solution optimality, search depth reached within a budget.",
+    "testNamesLikeThis": [
+      "test_never_plays_an_illegal_move",
+      "test_beats_random_opponent_in_95_percent",
+      "test_finds_optimal_line_within_depth_budget"
+    ],
+    "notThis": "test_board_serialisation_matches_golden",
+    "theTrap": "Grading the game's DATA STRUCTURES rather than its PLAY."
+  },
+
+  "scientific-computing": {
+    "deliverable": "A NUMERICAL RESULT with stated error. A simulation that converges, an integration that holds a tolerance, a solver that respects a conservation law.",
+    "gradedOn": "NUMERICAL PROPERTIES. Convergence order, error against an analytic solution, a conserved quantity holding to tolerance, stability under a stiffer parameter.",
+    "testNamesLikeThis": [
+      "test_converges_at_second_order",
+      "test_energy_is_conserved_to_1e_9",
+      "test_matches_analytic_solution_within_tolerance",
+      "test_stable_at_cfl_limit"
+    ],
+    "notThis": "test_output_csv_matches_golden",
+    "theTrap": "Grading the OUTPUT FILE rather than the NUMERICS. A simulation graded on 'the csv is byte-identical' is data-processing."
+  }
+}

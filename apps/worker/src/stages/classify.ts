@@ -35,6 +35,7 @@ import { join, relative } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { subscriptionEnv } from "../claude/no-billing.ts";
 import { blockedCategories } from "../../../../packages/shared/src/taxonomy.ts";
+import { categorySpec } from "./categories.ts";
 
 const CATEGORIES = [
   "system-administration", "build-and-dependency-management", "data-processing",
@@ -319,21 +320,53 @@ export function classifierFailure(c: Classification, declared: string): string {
 
   lines.push(
     ``,
-    `This is NOT fixed by editing the category in task.toml. Snorkel passed the ENUM both times`,
-    `("✅ Category 'machine-learning' is valid") and rejected the TASK in the same run. The`,
-    `classifier reads what the agent must produce and what it is graded on.`,
+    `This is NOT fixed by editing the category in task.toml. Snorkel passes the ENUM and rejects`,
+    `the TASK in the same run — the classifier never reads task.toml. It reads what the agent must`,
+    `PRODUCE and what it is GRADED ON.`,
     ``,
-    `Two blocked framings, both of which we have now shipped and had rejected:`,
-    `  • "there are defects in this code, find and fix them"   -> software-engineering / debugging`,
-    `  • "migrate / rematerialize / transform this data to a new spec" -> data-processing`,
+    `Three blocked framings. We have shipped and had rejected two of them:`,
+    `  • "there are defects in this code, find and fix them"     -> software-engineering / debugging`,
+    `  • "migrate / rematerialize / transform this to a new spec" -> data-processing`,
+    `  • anything graded on "the output file is correct"          -> data-processing`,
     ``,
-    `A migration is ETL no matter how much machine-learning vocabulary surrounds it. To belong`,
-    `to "${declared}", the agent's DELIVERABLE and its GRADING must be about MODEL BEHAVIOUR:`,
-    `training or evaluating a model, calibrating a decision threshold to hit a target metric,`,
-    `selecting an operating point, measuring model quality. Grade it on precision/recall, a`,
-    `calibration error, an operating threshold — not on "the output table is correct".`,
-    ``,
-    `Rework the SUBSTANCE. Change what the agent must build and how it is judged, not the label.`,
+  );
+
+  // ---- WHAT THE ASSIGNED CATEGORY ACTUALLY REQUIRES -------------------------------------------
+  //
+  // This block used to be hardcoded MACHINE-LEARNING advice with `${declared}` substituted into
+  // it — so a SECURITY task that got blocked was solemnly told that "to belong to security, the
+  // deliverable and grading must be about MODEL BEHAVIOUR: precision, recall, calibration, an
+  // operating threshold." If Claude had followed that, the task would have become machine-learning
+  // while task.toml said security, and been rejected the other way. Advice for the wrong category
+  // is worse than no advice: it is confidently wrong, and the model has no way to know.
+  const spec = categorySpec(declared);
+  if (spec) {
+    lines.push(
+      `WHAT "${declared}" ACTUALLY REQUIRES`,
+      ``,
+      `  DELIVERABLE  ${spec.deliverable}`,
+      ``,
+      `  GRADED ON    ${spec.gradedOn}`,
+      ``,
+      `  Test names in this category look like:`,
+      ...spec.testNamesLikeThis.map((t: string) => `    ${t}`),
+      ``,
+      `  NOT like:    ${spec.notThis}`,
+      ``,
+      `  THE TRAP:    ${spec.theTrap}`,
+      ``,
+    );
+  } else {
+    lines.push(
+      `NOTE: "${declared}" has no entry in config/categories.json, so this report cannot tell you`,
+      `what that category requires. Add one — a blocked task with no guidance is a task that gets`,
+      `rebuilt by guesswork.`,
+      ``,
+    );
+  }
+
+  lines.push(
+    `Rework the SUBSTANCE. Change what the agent must BUILD and how it is JUDGED — never the label.`,
   );
 
   return lines.join("\n");

@@ -102,6 +102,42 @@ function runDirFor(cfg: Config, slug: string, label: string): string {
  */
 const EDITOR_DONE: readonly number[] = [S.SUBMITTED, S.SENT_TO_REVIEWER];
 
+/**
+ * Did the gate stop at the CATEGORY CLASSIFIER?
+ *
+ * That failure is different in kind from every other one the gate produces. A ruff error is a
+ * defect in a good task; a blocked category means the task is asking for the wrong thing, and no
+ * amount of patching will fix it — it has to be rebuilt. So it gets a different prompt.
+ *
+ * Matched on the report classify.ts writes, which begins "STAGE: category classifier".
+ */
+function isCategoryBlock(lastError: string | null | undefined): boolean {
+  return /^STAGE:\s*category classifier/im.test(lastError ?? "");
+}
+
+/**
+ * A stable fingerprint of a failure, so we can tell "failed again" from "failed the SAME WAY again".
+ *
+ * Retries are uncapped, which is right — a task that needs five attempts should get them. But an
+ * uncapped loop on an UNFIXABLE task would burn rate limit forever, and rate limit is the one thing
+ * this system genuinely spends. So the loop is bounded by PROGRESS: the same fingerprint N times
+ * running means the fix turns are not moving anything, and it is time to say so.
+ *
+ * Deliberately coarse — the STAGE line plus the first real line of the report. Confidences,
+ * timings, paths and attempt counters all move between runs while the failure is the same failure,
+ * and a fingerprint that changed every time would never trip.
+ */
+function failureSignature(lastError: string | null | undefined): string | null {
+  const e = (lastError ?? "").trim();
+  if (!e) return null;
+  const stage = /^STAGE:\s*(.+)$/im.exec(e)?.[1]?.replace(/\s*\(.*$/, "").trim() ?? "";
+  const first = e
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l && !/^STAGE:/i.test(l)) ?? "";
+  return `${stage}::${first.replace(/[\d.]+/g, "#").slice(0, 120)}`;
+}
+
 async function transition(
   ctx: Ctx, row: TerminusRow, ws: string, to: number,
   ev: { stage: any; message?: string; detail?: Record<string, unknown> },
@@ -340,15 +376,57 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
 
     case S.VERIFY_FAILED: {
       const s = st();
-      if (s.attempt + 1 >= cfg.retries.verifyAttempts) {
+
+      // ---- THE RETRY POLICY -------------------------------------------------------------------
+      //
+      // verifyAttempts: 0 means NO CAP. The operator's rule, and they are right: a cap turns a task
+      // that needed five attempts into a dead task, and throws away everything already spent on it.
+      // A build that is MAKING PROGRESS must not be killed by a counter.
+      //
+      // But uncapped is not the same as blind. The thing this system actually spends is rate limit,
+      // and a task that CANNOT be fixed would burn it forever. So the loop is bounded by PROGRESS,
+      // not by attempts: if the gate fails the SAME WAY N times running, we are going in circles —
+      // and a machine going in circles should say so rather than keep going.
+      const capped = cfg.retries.verifyAttempts > 0;
+      if (capped && s.attempt + 1 >= cfg.retries.verifyAttempts) {
         await fail(ctx, row, ws, "verify",
           `Verify gate failed ${cfg.retries.verifyAttempts}x. Last failure:\n${s.lastError ?? "(none)"}`);
         return true;
       }
-      // Increment BEFORE the fix call: a crash inside FIX_RUNNING then burns one attempt,
-      // which is the fail-safe direction. An infinite fix loop is far worse.
+
+      const stuckAt = cfg.retries.stuckAfterIdenticalFailures ?? 3;
+      const sig = failureSignature(s.lastError);
+      const repeats = sig && sig === s.lastFailureSig ? (s.sameFailureCount ?? 0) + 1 : 1;
+      patchState(ws, { lastFailureSig: sig, sameFailureCount: repeats });
+
+      if (repeats >= stuckAt) {
+        // NOT a failure — a question. The fix loop has produced the identical failure N times, so
+        // whatever it is doing is not working, and another turn of the same crank will not help.
+        // ask.ts exists for exactly this: stop, show a human the wall we keep hitting, and let them
+        // redirect. The task stays alive and its session keeps its context.
+        await fail(
+          ctx, row, ws, "verify",
+          `STUCK: the gate has failed the SAME way ${repeats} times in a row (${s.attempt + 1} attempts total).\n\n` +
+            `Retries are uncapped, so this is not a counter running out — it is the fix loop going in ` +
+            `circles. Another turn of the same crank will produce the same failure and spend more ` +
+            `rate limit for nothing.\n\n` +
+            `The wall we keep hitting:\n${s.lastError ?? "(none)"}\n\n` +
+            `Retry to try again anyway, or change the task and retry.`,
+          true, // NEEDS_HUMAN — the machine has run out of ideas, which is a thing to say out loud.
+        );
+        return true;
+      }
+
+      // Increment BEFORE the fix call: a crash inside FIX_RUNNING then burns one attempt, which is
+      // the fail-safe direction.
       patchState(ws, { attempt: s.attempt + 1 });
-      await transition(ctx, row, ws, S.FIX_RUNNING, { stage: "fix" });
+      await transition(ctx, row, ws, S.FIX_RUNNING, {
+        stage: "fix",
+        message:
+          `gate failed — attempt ${s.attempt + 2}` +
+          (capped ? ` of ${cfg.retries.verifyAttempts}` : " (uncapped)") +
+          (isCategoryBlock(s.lastError) ? " · REDESIGN (blocked category)" : ""),
+      });
       return true;
     }
 
@@ -359,13 +437,25 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
         message: "feeding the docker failure back to the build session",
       });
       try {
+        // A BLOCKED CATEGORY IS NOT A BUG YOU PATCH — IT IS A TASK YOU REBUILD.
+        //
+        // Everything else the gate rejects (a ruff error, an unpinned image, a wrong
+        // codebase_size, a broken oracle) is a defect in an otherwise-correct task, and 03-fix.md
+        // is right for it: "read the failure, fix that, do not change the task."
+        //
+        // A classifier block is the opposite. The task is *working* — it built, and if the gate had
+        // reached Docker it would probably have passed. What is wrong is WHAT IT ASKS FOR. Handing
+        // that to a prompt whose whole message is "only fix what the check complains about" invites
+        // the model to edit task.toml and call it done, which is precisely the thing that cannot
+        // work: the classifier never reads task.toml.
+        const blocked = isCategoryBlock(s2.lastError);
         await fixTask({
           workspace: ws,
           sessionId: s2.claudeSessionId,
-          template: "03-fix.md",
+          template: blocked ? "08-redesign.md" : "03-fix.md",
           vars: {
             attempt: s2.attempt,
-            maxAttempts: cfg.retries.verifyAttempts,
+            maxAttempts: cfg.retries.verifyAttempts || "unlimited",
             failureReport: s2.lastError ?? "(no failure captured)",
           },
           timeoutMin: cfg.claude.fixTimeoutMin,

@@ -33,6 +33,20 @@ export interface LocalState {
   feedbackStartedAt: string | null;
 
   /**
+   * A fingerprint of the last gate failure, and how many times in a row we have seen it.
+   *
+   * Retries are UNCAPPED (config retries.verifyAttempts = 0) — a task that needs five attempts
+   * should get them, and a counter that kills an improving build throws away everything already
+   * spent. But uncapped is not blind: the thing this system actually spends is rate limit, and an
+   * unfixable task would burn it forever.
+   *
+   * So the loop is bounded by PROGRESS, not attempts. The same failure N times running means the
+   * fix turns are not moving anything, and the task stops and asks a human instead of cranking.
+   */
+  lastFailureSig?: string | null;
+  sameFailureCount?: number;
+
+  /**
    * WHICH HALF OF THE SUBMISSION ARE WE ON.
    *
    *   1  the CI pass. Tick the rubric box, leave "Send to reviewer?" unticked, submit. Snorkel

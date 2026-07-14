@@ -4,7 +4,15 @@ import { resolve } from "node:path";
 
 export interface Config {
   paths: { workspace: string; runs: string; zipOutput: string; documentation: string };
-  retries: { verifyAttempts: number; feedbackAttempts: number; explainAttempts: number };
+  retries: {
+    /** 0 = NO CAP. Keep fixing until it passes — a counter must not kill a task that is improving. */
+    verifyAttempts: number;
+    feedbackAttempts: number;
+    /** Explanations keep their cap: a prose style-validator has nothing to make progress on. */
+    explainAttempts: number;
+    /** Uncapped != blind. This many IDENTICAL failures in a row means we are going in circles. */
+    stuckAfterIdenticalFailures?: number;
+  };
   claude: {
     maxConcurrent: number; studyTimeoutMin: number; buildTimeoutMin: number;
     fixTimeoutMin: number; explainTimeoutMin: number;

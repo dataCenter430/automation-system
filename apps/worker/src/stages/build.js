@@ -80,7 +80,7 @@ export async function buildTask(input) {
     // is a viewer. Because the SDK's session lands in this workspace's own Claude project
     // store, the extension's Claude panel shows you this build's conversation.
     if (input.openEditor) {
-        openInEditor(workspace, (m) => void input.onProgress?.(m));
+        void openInEditor(workspace, (m) => void input.onProgress?.(m));
     }
     const skeleton = await seedSkeleton(workspace);
     if (skeleton.source === "zip") {

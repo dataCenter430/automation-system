@@ -1,5 +1,5 @@
 {
-  "$comment": "WHAT EACH CATEGORY ACTUALLY IS — the deliverable, and what it is graded on. This is the only thing that decides the classifier's verdict; task.toml's `category` field is never read by it. Used by stages/classify.ts to tell a build session what its assigned category REQUIRES, and by prompts/08-redesign.md when a task has to be rebuilt.",
+  "$comment": "WHAT EACH CATEGORY ACTUALLY IS — the deliverable, and what it is graded on. This is the only thing that decides the classifier's verdict; task.toml's `category` field is never read by it. Injected into prompts/09-design.md and prompts/02-build.md so the build session sees its category's definition BEFORE it designs anything (it used to see this only inside the failure message, after already getting it wrong), and used by stages/classify.ts to explain a block.",
 
   "$whyThisFileExists": "The classifier's failure message used to end with hardcoded MACHINE-LEARNING advice — 'to belong to X, the deliverable and grading must be about MODEL BEHAVIOUR: precision/recall, calibration, an operating threshold' — with X substituted in. So a SECURITY task that got blocked was told to go and calibrate a model. If Claude had obeyed, the task would have become machine-learning while task.toml said security, and been rejected the other way. The advice has to be per-category or it is worse than none.",
 
@@ -49,10 +49,12 @@
   "machine-learning": {
     "deliverable": "A STATEMENT ABOUT MODEL BEHAVIOUR. A trained or evaluated or calibrated model — and the number that describes how it behaves.",
     "gradedOn": "MODEL QUALITY METRICS. Precision, recall, PR-AUC, a confusion matrix at a chosen threshold, calibration error, an operating point that hits a stated target.",
+    "$testNameNote": "None of these compares an OUTPUT to a REFERENCE. This list used to end with `test_confusion_matrix_at_threshold_matches_reference`, and that name is a trap: comparing a computed matrix to a reference matrix grades the OUTPUT DATA, which is data-processing — the very thing this category's `notThis` warns about. Our own canonical example contradicted our own rule, and a session copying it faithfully would have been blocked. Grade what the numbers MEAN (does it clear the target?), never that they equal a stored copy.",
     "testNamesLikeThis": [
       "test_threshold_achieves_recall_0_95",
       "test_pr_auc_above_baseline",
-      "test_confusion_matrix_at_threshold_matches_reference"
+      "test_precision_at_operating_point_meets_target",
+      "test_calibration_error_within_tolerance"
     ],
     "notThis": "test_output_table_matches_spec. BUILDING A FEATURE PIPELINE IS NOT MACHINE LEARNING — it is data-processing, and data-processing is BLOCKED. Materialising a feature store, computing features to a spec, migrating a table between schema versions, even computing drift over two datasets: every one of those is graded on whether the OUTPUT DATA is correct, and that is ETL.",
     "theTrap": "Machine-learning VOCABULARY around an ETL deliverable. The classifier reads the deliverable."

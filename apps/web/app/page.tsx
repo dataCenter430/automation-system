@@ -21,7 +21,7 @@ import {
  * is not duplicated here.
  */
 export default function Dashboard() {
-  const { tasks, events, error, refresh } = useFleetData();
+  const { tasks, events, fleet, error, refresh } = useFleetData();
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -88,18 +88,49 @@ export default function Dashboard() {
               <QuestionCard key={t.question!.id} task={t} q={t.question!} onAnswered={refresh} />
             ))}
 
-          <TaskTable tasks={tasks} selected={selected} onSelect={setSelected} onAct={act} busy={busy} />
+          {/* `workerDead` is what stops the table lying. A row's state is only the last thing
+              a worker WROTE — it is not evidence that a worker is still there. See TaskTable. */}
+          <TaskTable
+            tasks={tasks}
+            selected={selected}
+            onSelect={setSelected}
+            onAct={act}
+            busy={busy}
+            workerDead={!!fleet && fleet.stale}
+          />
         </div>
 
-        {/* Below it, side by side: what happened to the row you just clicked. The transcript
-            and the gate verdict answer the same question and are read together. */}
+        {/* THE BOTTOM PANEL IS STATIC: the transcript on the left, the gate verdict on the right,
+            always present — never a panel that appears and vanishes as you click around. Selecting
+            a row fills both; with nothing selected they invite you to pick one. */}
         <div className="main" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {sel && <Detail t={sel} events={events} />}
+          {sel ? <Detail t={sel} events={events} /> : <EmptyFollow />}
         </div>
 
         <GateVerdict taskId={selected} />
       </div>
     </>
+  );
+}
+
+/**
+ * The static bottom transcript panel when no row is selected. It is always here — the panel does
+ * not collapse — so the layout never jumps as you click between rows.
+ */
+function EmptyFollow() {
+  return (
+    <section
+      style={{
+        background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 10,
+        padding: 14, minHeight: 240,
+      }}
+    >
+      <div className="hdr" style={{ marginBottom: 8 }}>Transcript</div>
+      <p style={{ margin: 0, fontSize: 12.5, color: "var(--dim)", lineHeight: 1.6 }}>
+        Select a task above to follow its Claude session here — the prompt, every tool call and its
+        result, and the running cost, live while it builds.
+      </p>
+    </section>
   );
 }
 

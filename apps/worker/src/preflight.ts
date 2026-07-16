@@ -11,6 +11,7 @@ import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { homedir } from "node:os";
 import { billingVarsPresent } from "./claude/no-billing.ts";
+import { personalModelKeyPresent } from "./stb/cli.ts";
 import { join } from "node:path";
 import { REPO_ROOT, snorkelRoot } from "../../../packages/shared/src/paths.ts";
 import * as docker from "./docker/runner.ts";
@@ -62,12 +63,16 @@ async function checkDocker(): Promise<Check> {
  * BOOT that your shell is trying to bill you, rather than never finding out at all.
  */
 function checkNoBilling(): Check {
-  const set = billingVarsPresent();
+  // Also cover OPENAI_* — the difficulty gate runs GPT-5.5 via `stb harbor run`, on PLATFORM
+  // credentials. If a personal OPENAI_API_KEY were in the environment, a harbor run could bill it
+  // for real. stb/cli.ts launders it out at every spawn (harborEnv), exactly as we launder Claude's;
+  // this check is the boot-time heads-up that your shell is trying to.
+  const set = personalModelKeyPresent();
   if (set.length === 0) {
     return {
       name: "Billing",
       ok: true,
-      detail: "subscription only — no API key in the environment (nothing here can be metered)",
+      detail: "subscription/platform only — no personal model key in the environment (nothing here can be metered)",
       required: true,
     };
   }

@@ -12,6 +12,63 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { join } from "node:path";
 import type { Explanations } from "./stages/explain.ts";
 
+/**
+ * One design the classifier said no to, and enough about it to tell a new design apart.
+ *
+ * `gradingAxis` is the load-bearing field. It is the answer to "what does the assertion
+ * MEASURE?", and it is the thing three consecutive rebuilds never changed while changing
+ * everything else. A redesign that keeps the axis has not redesigned anything, however
+ * different its nouns are.
+ */
+export interface RejectedDesign {
+  attempt: number;
+  /** What the classifier called it, and how sure it was. */
+  predicted: string;
+  confidence: number;
+  /** The classifier's own words — the only field that differed across the three rebuilds. */
+  why: string;
+  /** What the agent was asked to produce. */
+  deliverable: string;
+  /** What decided whether it was right. THE AXIS. */
+  gradedOn: string;
+  gradingAxis: GradingAxis;
+  /** The test names, which are what the classifier actually reads. */
+  testNames: string[];
+  at: string;
+}
+
+/**
+ * WHAT THE ASSERTION MEASURES. A closed vocabulary, deliberately.
+ *
+ * An open-ended "describe your grading approach" invites prose, and prose is what let three
+ * rebuilds each describe the same equality assertion in fresh language. An enum cannot be
+ * talked around: `equality-vs-reference` is rejected by construction for any category whose
+ * deliverable is not literally an output artifact, and the worker can check "is this axis
+ * already in the ledger?" mechanically, in microseconds, before it spends a single build.
+ */
+export type GradingAxis =
+  /** agent's output == the reference output. THIS IS DATA-PROCESSING. Blocked, always. */
+  | "equality-vs-reference"
+  /** a measured property clears a stated bar: recall >= 0.95, AP >= baseline, error < tol. */
+  | "property-threshold"
+  /** an invariant must hold under attack/stress: a forged signature is refused, energy is conserved. */
+  | "invariant-violation"
+  /** the thing produced beats a named alternative on a metric: challenger vs champion, vs a baseline rule. */
+  | "comparative-baseline"
+  /** the observable end state of a system is correct: the service survives a restart, the limit is enforced. */
+  | "observable-end-state";
+
+export const GRADING_AXES: GradingAxis[] = [
+  "equality-vs-reference",
+  "property-threshold",
+  "invariant-violation",
+  "comparative-baseline",
+  "observable-end-state",
+];
+
+/** The one axis that is data-processing BY DEFINITION, whatever the domain nouns say. */
+export const BLOCKED_AXIS: GradingAxis = "equality-vs-reference";
+
 export interface LocalState {
   taskId: string;
   slug: string;
@@ -45,6 +102,35 @@ export interface LocalState {
    */
   lastFailureSig?: string | null;
   sameFailureCount?: number;
+
+  /**
+   * EVERY DESIGN THE CLASSIFIER HAS ALREADY REJECTED.
+   *
+   * Without this, a redesign is blind. It is handed the LATEST rejection and nothing else, so
+   * it cannot know it is re-proposing something it already tried — and it cannot be held to
+   * "something genuinely new", because nobody, including the machine checking it, knows what
+   * old was.
+   *
+   * It also fixes a lie the system used to tell. The stuck detector fingerprinted the gate's
+   * VERDICT ("software-engineering (0.92)") rather than the DESIGN, so three wholly different
+   * task trees — a Terraform spec recovery, a threshold calibrator, and a champion/challenger
+   * selector — produced one byte-identical fingerprint, and the pipeline reported "the fix loop
+   * is going in circles" about a loop that had rebuilt the task from scratch twice. With the
+   * ledger, "did the design actually change?" is a question we can answer instead of guess.
+   *
+   * Append-only. Never overwritten — the whole value is the history.
+   */
+  rejectedDesigns?: RejectedDesign[];
+
+  /**
+   * How many category blocks in a row, REGARDLESS of whether the design changed.
+   *
+   * Distinct from sameFailureCount, which now only counts a design that did NOT change. This
+   * one is a budget on exploration: N genuinely different designs, all blocked, is not circling
+   * — it is honest failure, and it deserves an honest message rather than a fabricated claim
+   * that the loop went in circles.
+   */
+  blockedStreak?: number;
 
   /**
    * WHICH HALF OF THE SUBMISSION ARE WE ON.

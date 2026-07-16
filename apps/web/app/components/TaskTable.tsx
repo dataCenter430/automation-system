@@ -23,18 +23,33 @@ import { fmtElapsed, sinceOf, stateMeta, useNow, type Task } from "./Shell";
  * MODEL is provenance, not choice: it is the model that ACTUALLY answered, read back from the
  * session transcript. The pin lives in config/pipeline.json. Two models in one session means
  * the pin changed under a running build — shown in --warn, because you want to know that.
+ *
+ * STALLED, and why this table takes a `workerDead` prop at all:
+ *
+ * A row's pipeline_state is the last thing a worker WROTE. It is not, and has never been,
+ * evidence that a worker is still there. When the worker died silently on 2026-07-13 this
+ * table went on rendering VERIFYING with a pulsing dot for an hour and forty minutes, and a
+ * pulsing dot means "this is happening right now" — so the obvious reading was that the lint
+ * gate had hung, and the next hour went into the gate instead of into the corpse. The meters
+ * directly above knew perfectly well the worker was gone; the row did not ask them.
+ *
+ * So a live-looking state is now cross-checked against the heartbeat, and when the worker is
+ * stale every one of them reads STALLED. The state itself is not lost — it moves into the
+ * tooltip, where it is diagnosis rather than a claim about the present.
  */
 
 const COLS = "3px 152px minmax(180px, 1fr) 140px 62px 78px 86px 104px";
 
 export function TaskTable({
-  tasks, selected, onSelect, onAct, busy,
+  tasks, selected, onSelect, onAct, busy, workerDead,
 }: {
   tasks: Task[];
   selected: string | null;
   onSelect: (taskId: string | null) => void;
   onAct: (taskId: string, action: "start" | "approve" | "retry") => void;
   busy: string | null;
+  /** The worker's heartbeat is stale. Nothing is advancing ANY task, whatever the rows say. */
+  workerDead: boolean;
 }) {
   const now = useNow();
 
@@ -82,6 +97,17 @@ export function TaskTable({
             tasks.map((t) => {
               const meta = stateMeta(t.pipeline_state);
               const isSel = selected === t.task_id;
+
+              // A state that CLAIMS to be running, with no worker running it. The dot must not
+              // pulse and the name must not be believed — this row is a corpse, not a build.
+              const stalled = workerDead && meta.live;
+              const color = stalled ? "var(--bad)" : meta.color;
+              const hint = stalled
+                ? `STALLED in ${meta.name}. The worker is not running, so nothing is advancing ` +
+                  `this task — it is not slow, it is abandoned. Start the worker ` +
+                  `(npm run worker:supervised); its boot sweep re-enters this state and picks ` +
+                  `the task back up where it left off.`
+                : meta.hint;
               const since = sinceOf(t);
               const multiModel = t.models.length > 1;
 
@@ -90,7 +116,7 @@ export function TaskTable({
                   key={t.task_id}
                   className="row"
                   onClick={() => onSelect(isSel ? null : t.task_id)}
-                  title={meta.hint}
+                  title={hint}
                   style={{
                     display: "grid", gridTemplateColumns: COLS, alignItems: "center",
                     gap: 10, height: 40, paddingRight: 14, cursor: "pointer",
@@ -102,13 +128,15 @@ export function TaskTable({
                   <span
                     style={{
                       width: 3, height: "100%",
-                      background: isSel ? "var(--brand)" : meta.color,
+                      background: isSel ? "var(--brand)" : color,
                     }}
                   />
 
-                  <span className="pill" style={{ color: meta.color, justifySelf: "start", marginLeft: 11 }}>
-                    <span className={meta.live ? "dot pulse" : "dot"} />
-                    {meta.name}
+                  <span className="pill" style={{ color, justifySelf: "start", marginLeft: 11 }}>
+                    {/* No pulse when stalled. The pulse is this table's one claim about the
+                        PRESENT tense, and it is the claim that misled someone for an hour. */}
+                    <span className={meta.live && !stalled ? "dot pulse" : "dot"} />
+                    {stalled ? "STALLED" : meta.name}
                   </span>
 
                   <span style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>

@@ -1,5 +1,5 @@
 import { resolve_ } from "../browser/selectors.ts";
-import { readMonaco, readMonacoFallback, snap } from "../browser/actions.ts";
+import { readMonaco, readRenderedLinesUNSAFE, snap } from "../browser/actions.ts";
 export class FeedbackInconclusive extends Error {
     output;
     constructor(msg, output) {
@@ -82,8 +82,13 @@ async function readOutput(page) {
     // The fallback reads RENDERED lines, which Monaco virtualizes, so what we get back is
     // whatever happens to be on screen. Usable as evidence of failure; never as proof of
     // success. See classify().
-    for (const key of ["submission.textSummaryField", "submission.qualityCheckField"]) {
-        const t = await readMonacoFallback(page, key).catch(() => "");
+    for (const key of [
+        "submission.textSummaryField",
+        "submission.qualityCheckField",
+        "submission.agentReviewField",
+        "submission.testQualityReportField",
+    ]) {
+        const t = await readRenderedLinesUNSAFE(page, key).catch(() => "");
         if (t)
             parts.push(`--- ${key} (RENDERED — MAY BE TRUNCATED) ---\n${t}`);
     }

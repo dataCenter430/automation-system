@@ -16,7 +16,7 @@ import { loadConfig } from "./config.ts";
 import { preflight, report } from "./preflight.ts";
 import { advance, gateLoad, type Ctx } from "./pipeline.ts";
 import {
-  claimNextTask, findInterrupted, getTask,
+  claimNextTask, findInterrupted, getTask, patchTask,
 } from "../../../packages/shared/src/supabase.ts";
 import {
   CRASHED_MIDFLIGHT, PipelineState as S, stateName, isTerminal,
@@ -26,6 +26,11 @@ import { claudeLoad, sessionExists } from "./claude/session.ts";
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { acquire, release, AlreadyRunning } from "./lock.ts";
+import { withDeadline } from "./util/deadline.ts";
+import { readState, patchState } from "./state.ts";
+import { realRunner, submissionsList } from "./stb/cli.ts";
+import { ensureReady, realLoginRunner } from "./stb/login.ts";
+import { reconcile, WAITING_ON_SNORKEL } from "./stb/reconcile.ts";
 import type { TerminusRow } from "../../../packages/shared/src/types.ts";
 
 const cfg = loadConfig();
@@ -90,6 +95,34 @@ function writeStatus(): void {
 /** Rate limits are a subscription reality, not a bug. Back off; never burn a retry. */
 let backoffUntil = 0;
 
+/**
+ * THE POLL LOOP MUST NEVER BLOCK FOREVER, AND MUST NEVER LEAVE QUIETLY.
+ *
+ * Both halves of that are scar tissue, from one night that cost eight tasks.
+ *
+ * The VM's NIC dropped and re-leased (`dhcp4 (ens33): new lease`, 22:55:40; NetworkManager
+ * did not reach CONNECTED_GLOBAL again until 22:58:10). The loop was parked on an un-timed
+ * Supabase fetch. The socket went away underneath it and THE PROMISE NEVER SETTLED — no
+ * rejection, so nothing was thrown and nothing was caught. The heartbeat froze at 22:43:41
+ * while the in-flight Claude session, which owned handles of its own, kept logging happily
+ * for another twelve minutes. When that session finished at 22:56:29 the process had no
+ * live handles and no runnable work left, so node's event loop simply drained and the
+ * worker EXITED WITHOUT A WORD: no throw, no `💥` line in runs/worker.log, no OOM in the
+ * kernel log, exit code 0. Nothing supervised it, so it stayed dead for an hour and forty
+ * minutes — while the dashboard went on pulsing VERIFYING at a task nobody was driving.
+ *
+ * Hence, in order: a deadline on every await, a try/catch on every tick, a watchdog that
+ * holds the event loop open and shouts if the loop stops turning, and a message on every
+ * route out of this process. A network blip must cost one poll interval, not a night.
+ */
+const DB_TIMEOUT_MS = 20_000;
+
+/** The loop stopped turning. Distinct from any DB error, so the watchdog can name the cause. */
+const WEDGED_AFTER_MS = 120_000;
+
+/** Set at the top of every tick. The watchdog reads it; nothing else may write it. */
+let lastTickAt = Date.now();
+
 async function step(taskId: string): Promise<void> {
   if (inFlight.has(taskId)) return;
   inFlight.add(taskId);
@@ -111,6 +144,62 @@ async function step(taskId: string): Promise<void> {
     ctx.log(`💥 ${taskId}: ${(e as Error).message}`);
   } finally {
     inFlight.delete(taskId);
+  }
+}
+
+/**
+ * The hourly Snorkel reconciliation. One `stb submissions list`, mapped onto local task states —
+ * see stb/reconcile.ts for the mapping. Self-guarded (never overlaps, never throws into the loop),
+ * and inert until stb is configured with a projectId.
+ */
+let lastReconcileAt = 0;
+let reconcileInFlight = false;
+
+/** Snorkel's numeric task_status enum: 0 working · 1 AI review · 2 human review · 3 accepted. */
+const TASK_STATUS_NUM: Record<string, number> = { HUMAN_REVIEW: 2, ACCEPTED: 3, OFFERED: 3 };
+
+async function reconcileSnorkel(): Promise<void> {
+  if (reconcileInFlight) return;
+  const stbCfg = cfg.stb;
+  if (!stbCfg?.projectId) return;
+  reconcileInFlight = true;
+  try {
+    // Cheap when already authenticated (just `keys show`); refreshes AI creds only on a fresh login.
+    await ensureReady(realRunner, realLoginRunner, { env: process.env, log: ctx.log });
+    const stbCtx = { run: realRunner, projectId: stbCfg.projectId };
+
+    await reconcile({
+      waitingTasks: async () => {
+        const rows = await withDeadline(findInterrupted(WAITING_ON_SNORKEL as number[]), DB_TIMEOUT_MS, "waitingTasks");
+        return rows.map((r) => ({
+          taskId: r.task_id,
+          slug: r.slug ?? r.task_id,
+          submissionId: r.submission_id,
+          pipelineState: r.pipeline_state,
+          taskStatus: null,
+        }));
+      },
+      list: () => submissionsList(stbCtx, { showFolders: true }),
+      apply: async (a) => {
+        const patch: Partial<TerminusRow> = { pipeline_state: a.to, submission_id: a.submissionId };
+        if (a.to === S.NEEDS_HUMAN) patch.last_error = a.reason;
+        const ts = a.taskStatus ? TASK_STATUS_NUM[a.taskStatus] : undefined;
+        if (ts !== undefined) patch.task_status = ts;
+        await patchTask(a.taskId, patch);
+
+        // Keep the local state.json in step so advance() and the dashboard agree on the new state.
+        const ws = resolve(cfg.paths.workspace, a.slug);
+        if (readState(ws)) {
+          patchState(ws, { pipelineState: a.to, lastError: a.to === S.NEEDS_HUMAN ? a.reason : null });
+        }
+        void step(a.taskId); // drive it now rather than waiting for the next poll
+      },
+      log: ctx.log,
+    });
+  } catch (e) {
+    ctx.log(`⚠ Snorkel reconcile failed: ${(e as Error).message}`);
+  } finally {
+    reconcileInFlight = false;
   }
 }
 
@@ -164,43 +253,106 @@ async function main(): Promise<void> {
 
   writeStatus(); // publish an idle-but-alive status before the first poll
 
+  const wd = watchdog();
+
   while (!stopping) {
+    lastTickAt = Date.now();
     writeStatus();
 
-    if (Date.now() < backoffUntil) {
-      // Still alive, just parked. writeStatus() above already refreshed `at`, so the
-      // dashboard shows a backed-off worker rather than a dead one.
-      await sleep(2000);
-      continue;
-    }
-
-    // Keep driving anything already underway (this is what un-parks CHECKING_FEEDBACK).
-    //
-    // FEEDBACK_FAILED belongs here for exactly the same reason VERIFY_FAILED does: it is a
-    // decision state, not a resting state — it exists only to route to the fixer or to give
-    // up. Normally the inner while-loop in step() carries a task straight through it, so
-    // nobody noticed it was missing from both this list and CRASHED_MIDFLIGHT. But a worker
-    // that died in the instant between committing FEEDBACK_FAILED and the next advance()
-    // left the task stranded forever, with nothing on any sweep that would ever look at it.
-    for (const r of await findInterrupted([
-      S.BUILT, S.VERIFY_FAILED, S.VERIFIED, S.ZIPPED, S.EXPLAINED, S.FEEDBACK_FAILED,
-      ...CRASHED_MIDFLIGHT,
-    ])) {
-      if (inFlight.size >= cfg.worker.maxParallelTasks) break;
-      void step(r.task_id);
-    }
-
-    // Then pick up new work, but only what the human has explicitly released.
-    if (inFlight.size < cfg.worker.maxParallelTasks) {
-      const claimed = await claimNextTask();
-      if (claimed) {
-        ctx.log(`▸ claimed ${claimed.slug ?? claimed.task_id} — "${claimed.title}"`);
-        void step(claimed.task_id);
+    try {
+      if (Date.now() < backoffUntil) {
+        // Still alive, just parked. writeStatus() above already refreshed `at`, so the
+        // dashboard shows a backed-off worker rather than a dead one.
+        await sleep(2000);
+        continue;
       }
+
+      // Keep driving anything already underway (this is what un-parks CHECKING_FEEDBACK).
+      //
+      // FEEDBACK_FAILED belongs here for exactly the same reason VERIFY_FAILED does: it is a
+      // decision state, not a resting state — it exists only to route to the fixer or to give
+      // up. Normally the inner while-loop in step() carries a task straight through it, so
+      // nobody noticed it was missing from both this list and CRASHED_MIDFLIGHT. But a worker
+      // that died in the instant between committing FEEDBACK_FAILED and the next advance()
+      // left the task stranded forever, with nothing on any sweep that would ever look at it.
+      const interrupted = await withDeadline(
+        findInterrupted([
+          S.BUILT, S.VERIFY_FAILED, S.VERIFIED, S.ZIPPED, S.EXPLAINED, S.FEEDBACK_FAILED,
+          // REVISE_PENDING is where the hourly Snorkel reconciler parks a task it just pulled back
+          // for revision. It is a resting state (the reconciler sets it and moves on), so it must
+          // be driven here or it would sit forever waiting for a step() that never comes.
+          S.REVISE_PENDING,
+          ...CRASHED_MIDFLIGHT,
+        ]),
+        DB_TIMEOUT_MS,
+        "findInterrupted",
+      );
+      for (const r of interrupted) {
+        if (inFlight.size >= cfg.worker.maxParallelTasks) break;
+        void step(r.task_id);
+      }
+
+      // Then pick up new work, but only what the human has explicitly released.
+      if (inFlight.size < cfg.worker.maxParallelTasks) {
+        const claimed = await withDeadline(claimNextTask(), DB_TIMEOUT_MS, "claimNextTask");
+        if (claimed) {
+          ctx.log(`▸ claimed ${claimed.slug ?? claimed.task_id} — "${claimed.title}"`);
+          void step(claimed.task_id);
+        }
+      }
+
+      // ONCE AN HOUR: reconcile the fleet against Snorkel. This is the only thing that learns a
+      // submission has come back needing revision (or been accepted/rejected) and routes it into
+      // the revise lap. Fire-and-forget — it self-guards against overlap and never throws into
+      // the loop.
+      const reconcileMs = (cfg.stb?.reconcileIntervalSec ?? 3600) * 1000;
+      if (cfg.stb?.projectId && Date.now() - lastReconcileAt >= reconcileMs) {
+        lastReconcileAt = Date.now();
+        void reconcileSnorkel();
+      }
+    } catch (e) {
+      // A tick that could not reach Supabase is a blip, not a death — and the correct
+      // response to a blip is to take the next tick. Nothing is lost by skipping one: every
+      // task's real state lives in state.json next to its own artifacts, in-flight steps are
+      // untouched (they are separate promises), and the boot sweep re-enters anything that
+      // was mid-flight. The ONLY thing that must not happen here is falling out of the loop.
+      ctx.log(`⚠ poll tick failed: ${(e as Error).message} — retrying in ${cfg.worker.pollIntervalSec}s`);
     }
 
     await sleep(cfg.worker.pollIntervalSec * 1000);
   }
+
+  clearInterval(wd); // a clean stop must be allowed to actually exit
+}
+
+/**
+ * The watchdog. Its boring job is the important one.
+ *
+ *  1. It is a permanent timer, so THE EVENT LOOP CAN NEVER RUN DRY. That alone makes the
+ *     silent exit above impossible: even a loop wedged on a promise that never settles now
+ *     keeps the process alive with a visibly stale heartbeat — a state the dashboard can
+ *     see and a human can act on. A process that simply vanishes is neither.
+ *  2. If the loop stops turning anyway, it says so out loud and exits NON-ZERO, so the
+ *     supervisor brings up a fresh worker instead of guarding a corpse.
+ *
+ * It deliberately does NOT write the heartbeat. The heartbeat means "the tick loop turned";
+ * a watchdog that refreshed it would upgrade a wedged worker into a lying one.
+ */
+function watchdog(): NodeJS.Timeout {
+  return setInterval(() => {
+    if (stopping) return;
+    const idle = Date.now() - lastTickAt;
+    if (idle <= WEDGED_AFTER_MS) return;
+
+    console.error(
+      `\n💥 worker wedged — the poll loop has not turned for ${Math.round(idle / 1000)}s ` +
+        `(the poll interval is ${cfg.worker.pollIntervalSec}s).\n` +
+        `Exiting so the supervisor can restart it. In-flight tasks resume from state.json ` +
+        `on the next boot; nothing is lost.\n`,
+    );
+    release();
+    process.exit(75); // EX_TEMPFAIL — "try me again", and distinguishable from a clean stop
+  }, 15_000);
 }
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
@@ -213,9 +365,39 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
   });
 }
 
+/**
+ * NOTHING MAY LEAVE THIS PROCESS QUIETLY.
+ *
+ * The worker once exited with code 0, no exception, and not one line of output — see the
+ * note on DB_TIMEOUT_MS. `main().catch()` below only covers a REJECTION; it cannot see an
+ * event loop that drained, an uncaught throw from a callback, or a rejected promise nobody
+ * awaited. Each of those now writes its own epitaph before it goes.
+ */
+process.on("uncaughtException", (e) => {
+  release();
+  console.error(`\n💥 worker died — uncaught exception:\n${e?.stack ?? e}\n`);
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (e) => {
+  release();
+  console.error(`\n💥 worker died — unhandled rejection:\n${(e as Error)?.stack ?? e}\n`);
+  process.exit(1);
+});
+
 // Belt and braces: a stale lock is only a nuisance (the next worker sees the pid is dead
 // and takes over), but releasing it cleanly means no nuisance at all.
-process.on("exit", release);
+process.on("exit", (code) => {
+  release();
+  // A zero exit that nobody asked for is the exact signature of the silent drain. If it
+  // ever happens again it will at least say so, in the log, at the moment it happens.
+  if (!stopping && code === 0) {
+    console.error(
+      `\n💥 worker exited on its own with code 0 — nobody asked it to stop, and it did not ` +
+        `throw. The poll loop fell out from under itself.\n`,
+    );
+  }
+});
 
 main().catch((e) => {
   release();

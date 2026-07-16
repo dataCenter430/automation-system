@@ -27,7 +27,25 @@ export function render(templateName: string, vars: Vars): string {
     return v === undefined || v === null || v === "" ? "" : body;
   });
 
+  // A PLACEHOLDER NOBODY SUPPLIED IS A BUG, NOT AN EMPTY STRING.
+  //
+  // This used to substitute "" for any key the caller had not passed, and the `leftover` check
+  // below could never catch it — the placeholder was already gone. So a template asking for
+  // {{categorySpec}} that nobody passed rendered a prompt with a silently EMPTY category
+  // definition: no throw, no warning, a build session flying blind, and a green test suite.
+  //
+  // The distinction that matters is PASSED-BUT-EMPTY vs NEVER-PASSED. `additional_note` is
+  // legitimately absent on most tasks and its caller passes it explicitly as undefined — that
+  // still renders "" and its {{#additional_note}} block still collapses. But a key the caller
+  // never mentioned at all is a wiring mistake, and it must be loud.
   s = s.replace(/\{\{(\w+)\}\}/g, (_m, key: string) => {
+    if (!(key in vars)) {
+      throw new Error(
+        `Prompt ${templateName} needs {{${key}}}, but the caller supplied no such variable. ` +
+          `Pass it explicitly (undefined is fine, and renders empty) — a placeholder that silently ` +
+          `renders to nothing is how a build session ends up reading a prompt with a hole in it.`,
+      );
+    }
     const v = vars[key];
     if (v === undefined || v === null) return "";
     return String(v);

@@ -15,6 +15,8 @@ import { join } from "node:path";
 import * as docker from "../docker/runner.ts";
 import { lintTask, formatFindings } from "./lint.ts";
 import { normalizeLineEndings } from "../util/lf.ts";
+import { classifyTask, classifierFailure } from "./classify.ts";
+import { instructionGate, formatInstructionVerdict } from "./instruction-gate.ts";
 const REWARD_PATH = "/logs/verifier/reward.txt";
 /** Read the reward the task itself wrote. Absent reward != 0; it means the run broke. */
 async function readReward(container, runDir, label) {
@@ -59,6 +61,96 @@ export async function verifyTask(opts) {
             failureReport: `STAGE: static lint (no Docker was run)\n\n${formatFindings(lint.findings)}\n\n` +
                 `Fix every BLOCKING finding above. Each names one rule and one file.`,
         };
+    }
+    // 2. CATEGORY CLASSIFIER — the check that actually rejected our first submission.
+    //
+    // Snorkel passed the enum ("✅ Category 'machine-learning' is valid") and rejected the task
+    // in the same run ("❌ Predicted category 'software-engineering' (0.95) is blocked"). Both
+    // were true: the label was legal, the task was not. A string compare cannot catch that, so
+    // we ask the same model Snorkel's CI announces it uses — REVIEW_MODEL="claude-haiku-4-5" —
+    // the same question, before we ever upload.
+    //
+    // Before Docker: this costs seconds, and a task that is blocked in substance should not
+    // spend six minutes building an image first.
+    if (opts.classify !== false) {
+        const c = await classifyTask(taskDir, opts.classifierModel);
+        if (c.unavailable) {
+            // Never silently pass. A gate that reports clean because it could not run its check is
+            // exactly how 14 ruff errors reached Snorkel.
+            lint.findings.push({
+                rule: "category_classifier",
+                severity: "warning",
+                file: "task.toml",
+                message: `Could not run the category classifier, so this task is NOT protected against the ` +
+                    `check that rejected our first submission. ${c.unavailable}`,
+            });
+        }
+        else if (c.blocked) {
+            const declared = (() => {
+                try {
+                    const t = readFileSync(join(taskDir, "task.toml"), "utf8");
+                    return /category\s*=\s*"([^"]+)"/.exec(t)?.[1] ?? "(unknown)";
+                }
+                catch {
+                    return "(unknown)";
+                }
+            })();
+            lint.findings.push({
+                rule: "predicted_category_blocked",
+                severity: "blocking",
+                file: "task.toml",
+                message: `classifies as "${c.predicted}" (${c.confidence.toFixed(2)}) — a blocked category. ${c.why}`,
+            });
+            return {
+                passed: false,
+                oracleReward: null,
+                nullReward: null,
+                lint,
+                logsDir: runDir,
+                failureReport: `STAGE: category classifier (no Docker was run)\n\n` +
+                    classifierFailure(c, declared),
+            };
+        }
+        else {
+            writeFileSync(join(runDir, "classifier.json"), JSON.stringify(c, null, 2), "utf8");
+        }
+    }
+    // 3. THE INSTRUCTION GATE — does the prompt read like a HUMAN wrote it?
+    //
+    // Snorkel's instruction guide: "Prompts should NOT be LLM-generated. We want to avoid the
+    // 'GPT-style' of writing (verbose, repetitive, and overly polite)." The Review Checklist marks
+    // every instruction criterion HIGH severity — one failure and the task is not accepted. So a
+    // task whose instruction reads like documentation is dead on arrival, however good the
+    // engineering underneath it.
+    //
+    // This check EXISTED (lintInstruction) and ran in exactly one place: upload.ts, deciding whether
+    // we could honestly tick the "Prompt Check" box. That is far too late — by then we have paid for
+    // the build, the image, the oracle run, the null run and the zip, and the fix loop never sees it
+    // because the gate said the task was fine.
+    //
+    // So it runs HERE, before Docker, next to the classifier and for the same reason: it is cheap,
+    // it is about SUBSTANCE, and a task that fails it should not spend six minutes building an image.
+    if (opts.instructionGate !== false) {
+        const g = await instructionGate(taskDir, { judge: opts.styleJudge !== false });
+        writeFileSync(join(runDir, "instruction.json"), JSON.stringify(g, null, 2), "utf8");
+        for (const f of g.findings) {
+            lint.findings.push({
+                rule: f.rule,
+                severity: f.severity,
+                file: "instruction.md",
+                message: f.evidence ? `${f.message}\n     evidence: ${f.evidence}` : f.message,
+            });
+        }
+        if (!g.ok) {
+            return {
+                passed: false,
+                oracleReward: null,
+                nullReward: null,
+                lint,
+                logsDir: runDir,
+                failureReport: formatInstructionVerdict(g),
+            };
+        }
     }
     await docker.assertDaemonUp();
     const image = `tb-${slug}:verify`;

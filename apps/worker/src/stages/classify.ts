@@ -237,13 +237,43 @@ Answer with ONLY a JSON object:
 ${ev}
 `.trim();
 
+/**
+ * Classify a task from its BUILT TREE.
+ *
+ * A thin wrapper now: everything below the evidence blob is shared with classifyEvidence(),
+ * because the classifier never touches the filesystem in the first place (`cwd: "/tmp"`,
+ * `tools: []` — it only ever sees the string we hand it). That is what makes the design gate
+ * possible: the same panel, the same prompt, the same model, reading a two-paragraph DESIGN
+ * instead of a finished 18-minute build.
+ */
 export async function classifyTask(
   taskDir: string,
   model = "claude-haiku-4-5",
   timeoutMs = 120_000,
 ): Promise<Classification> {
+  return classifyEvidence(evidence(taskDir), model, timeoutMs);
+}
+
+/**
+ * Classify from an EVIDENCE BLOB — the shape evidence() builds, from wherever.
+ *
+ * THE POINT: this same function grades a design statement written BEFORE anything is built.
+ * The verdict that cost four rebuilds was fully determined by information that existed at
+ * design time — the advocate made its 0.95 software-engineering case by quoting the routine
+ * the agent must implement and "nine test cases", both of which are present in two paragraphs
+ * written before a single file is laid down. Catching that costs four Haiku calls and a few
+ * seconds; missing it costs a build turn that has run as long as 18 minutes.
+ *
+ * Because the design gate and the real gate run the SAME panel over the SAME evidence shape,
+ * a design that passes here is a design whose BUILD will pass — unless the build drifts from
+ * the design, which is why we check that too (see designDrift()).
+ */
+export async function classifyEvidence(
+  ev: string,
+  model = "claude-haiku-4-5",
+  timeoutMs = 120_000,
+): Promise<Classification> {
   const blocked = blockedCategories();
-  const ev = evidence(taskDir);
 
   // The panel runs concurrently: one neutral, one advocate per blocked category. Four cheap
   // Haiku calls, before Docker.

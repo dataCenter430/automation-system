@@ -9,7 +9,7 @@
  * loop, which is what lets a task parked in CHECKING_FEEDBACK yield the worker to another
  * task instead of blocking it for 20 minutes.
  */
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   PipelineState as S, stateName, TaskStatus,
@@ -19,7 +19,12 @@ import {
 } from "../../../packages/shared/src/supabase.ts";
 import type { TerminusRow } from "../../../packages/shared/src/types.ts";
 import type { ParsedTask } from "../../../packages/shared/src/parse-task-blob.ts";
-import { readState, writeState, patchState, type LocalState } from "./state.ts";
+import {
+  readState, writeState, patchState, type LocalState, type RejectedDesign,
+} from "./state.ts";
+import { readDesign, axesExhausted, designFingerprint } from "./stages/design-gate.ts";
+import { createHash } from "node:crypto";
+import { slackConfig, notifyHuman } from "./notify/slack.ts";
 import { snap } from "./browser/actions.ts";
 import { closeEditor, touchEditor } from "./util/open-editor.ts";
 import { buildTask, fixTask, buildAlreadyComplete, BuildIncomplete } from "./stages/build.ts";
@@ -127,15 +132,203 @@ function isCategoryBlock(lastError: string | null | undefined): boolean {
  * timings, paths and attempt counters all move between runs while the failure is the same failure,
  * and a fingerprint that changed every time would never trip.
  */
-function failureSignature(lastError: string | null | undefined): string | null {
+function failureSignature(lastError: string | null | undefined, ws?: string): string | null {
   const e = (lastError ?? "").trim();
   if (!e) return null;
   const stage = /^STAGE:\s*(.+)$/im.exec(e)?.[1]?.replace(/\s*\(.*$/, "").trim() ?? "";
+
+  // A CATEGORY BLOCK IS FINGERPRINTED BY THE DESIGN, NOT BY THE VERDICT.
+  //
+  // This used to fingerprint the first line of the report — which, for a category block, is a
+  // sentence containing only the predicted and the declared category. So a task that was
+  // rebuilt from scratch into three unrelated deliverables (a Terraform spec recovery, a
+  // threshold calibrator, a champion/challenger selector) produced ONE byte-identical
+  // fingerprint all three times, because all three were still read as software-engineering.
+  //
+  // The stuck detector then announced "the fix loop is going in circles. Another turn of the
+  // same crank will produce the same failure" — about a loop that had rebuilt the entire task
+  // twice. It could not tell "the fixer changed nothing" from "the fixer changed everything and
+  // it is still blocked", and it called the second one the first. That is a lie the code was
+  // structurally incapable of not telling, and it killed a task that was genuinely exploring.
+  //
+  // The design's identity is its GRADING AXIS — what the assertions MEASURE. That is the thing
+  // three rebuilds never changed, and it is the only thing whose repetition means "circling".
+  if (isCategoryBlock(e) && ws) {
+    const d = readDesign(ws);
+    const axis = d?.gradingAxis ?? "unknown-axis";
+    const tests = (d?.testNames ?? []).map((t) => t.toLowerCase()).sort().join(",");
+    return `category classifier::${axis}::${hash(tests)}`;
+  }
+
   const first = e
     .split("\n")
     .map((l) => l.trim())
     .find((l) => l && !/^STAGE:/i.test(l)) ?? "";
   return `${stage}::${first.replace(/[\d.]+/g, "#").slice(0, 120)}`;
+}
+
+/** Short, stable, and only ever compared to itself. */
+function hash(s: string): string {
+  return createHash("sha1").update(s).digest("hex").slice(0, 12);
+}
+
+/**
+ * Write the design that just got blocked into the ledger.
+ *
+ * Reads the classifier's own verdict off disk (verify.ts now writes classifier.json on the
+ * BLOCKED branch too — it used to write it only when the task PASSED, which is why four
+ * rejections in a row left four empty directories and nothing to learn from).
+ */
+async function recordRejectedDesign(ctx: Ctx, ws: string, s: LocalState): Promise<void> {
+  const design = readDesign(ws);
+  const verdict = readClassifierVerdict(ws);
+  const tests = design?.testNames ?? builtTestNames(ws);
+
+  const entry: RejectedDesign = {
+    attempt: s.attempt,
+    predicted: verdict?.predicted ?? "(unrecorded)",
+    confidence: verdict?.confidence ?? 0,
+    why: verdict?.why ?? firstLine(s.lastError),
+    deliverable: design?.deliverable ?? "(no design.json — built before the design gate existed)",
+    gradedOn: design?.gradedOn ?? "(unrecorded)",
+    // NEVER FABRICATE THE AXIS. This used to default to "equality-vs-reference" when design.json
+    // was absent — which is a guess, and a load-bearing one: the axis is the ledger's identity key
+    // and what axesExhausted() counts. A wrong guess would both mask a genuinely new design as a
+    // repeat AND burn one of the four legal axes for a design that may never have used it.
+    // "unknown" is not a legal axis, so it can never collide with a real one or exhaust the space.
+    gradingAxis: design?.gradingAxis ?? ("unknown" as RejectedDesign["gradingAxis"]),
+    testNames: tests,
+    at: new Date().toISOString(),
+  };
+
+  // IDEMPOTENT. VERIFY_FAILED is re-entered by the worker's poll loop (it is in the interrupted
+  // list in index.ts), and a transition that fails midway would run this twice for one rejection.
+  // Double-counting would inflate blockedStreak and trip "OUT OF IDEAS" on a task that had only
+  // been blocked once.
+  const ledger = [...(s.rejectedDesigns ?? [])];
+  const fp = designFingerprint(entry);
+  if (ledger.some((r) => designFingerprint(r) === fp)) {
+    ctx.log(`  ↳ this design is already in the ledger — not double-counting it`);
+    return;
+  }
+
+  ledger.push(entry);
+  patchState(ws, { rejectedDesigns: ledger, blockedStreak: (s.blockedStreak ?? 0) + 1 });
+  ctx.log(
+    `  ↳ recorded rejected design #${ledger.length}: axis "${entry.gradingAxis}" ` +
+      `→ blocked as ${entry.predicted} (${entry.confidence})`,
+  );
+}
+
+/** The category task.toml declares. The classifier never reads it; the axis rules do. */
+function declaredCategory(ws: string): string {
+  try {
+    const t = readFileSync(join(ws, "task.toml"), "utf8");
+    return (/category\s*=\s*"([^"]+)"/.exec(t)?.[1] ?? "").trim().toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function firstLine(e: string | null | undefined): string {
+  return (e ?? "").split("\n").map((l) => l.trim()).find((l) => l && !/^STAGE:/i.test(l)) ?? "";
+}
+
+/** The test names actually on disk — the fallback identity for a task built before design.json. */
+function builtTestNames(ws: string): string[] {
+  try {
+    const p = join(ws, "tests", "test_outputs.py");
+    if (!existsSync(p)) return [];
+    return (readFileSync(p, "utf8").match(/^\s*def (test_\w+)/gm) ?? [])
+      .map((m) => m.trim().replace(/^def /, ""));
+  } catch {
+    return [];
+  }
+}
+
+interface ClassifierVerdict { predicted: string; confidence: number; why: string }
+
+function readClassifierVerdict(ws: string): ClassifierVerdict | null {
+  const s = readState(ws);
+  const dir = s ? join(ws, ".pipeline") : null;
+  if (!dir) return null;
+  const p = join(dir, "classifier.json");
+  if (!existsSync(p)) return null;
+  try {
+    const j = JSON.parse(readFileSync(p, "utf8"));
+    return { predicted: String(j.predicted ?? ""), confidence: Number(j.confidence ?? 0), why: String(j.why ?? "") };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A HUMAN PRESSED RETRY. Make it mean something.
+ *
+ * It did not used to. `retryTarget()` sent a task that died in VERIFY_FAILED to BUILD_RUNNING,
+ * where `buildAlreadyComplete()` found `.pipeline/BUILD_DONE` still sitting on disk from the
+ * last build and jumped straight to BUILT — **without spending a single Claude turn**. The same
+ * tree then went into the same gate and came out with the same verdict, and the task was back in
+ * NEEDS_HUMAN within minutes. The web app's `attempt: 0` / `last_error: null` were dead writes:
+ * state.json is only seeded from the DB `if (!existing)`, and `sameFailureCount` /
+ * `lastFailureSig` live ONLY in state.json, where the web app cannot reach them.
+ *
+ * So the user's instruction — "on retry, let the session proceed with another testing logic" —
+ * was not merely unimplemented. It was impossible: retry could not reach Claude at all.
+ *
+ * Now a retry after a category block:
+ *   • banks the rejected design in the ledger (so the next one cannot repeat it),
+ *   • DISCARDS the Claude session — an anchored session re-proposes its own design, and this one
+ *     had already committed to the axis three times,
+ *   • deletes BUILD_DONE, so BUILD_RUNNING must actually run,
+ *   • clears the retry-scoped counters that the web app cannot touch.
+ */
+function reconcileRetry(ctx: Ctx, ws: string, row: TerminusRow, s: LocalState): void {
+  // THE SIGNAL MUST BE UNAMBIGUOUS, BECAUSE THE RESPONSE IS DESTRUCTIVE.
+  //
+  // The obvious signal — "the DB's last_error is null but ours is not" — is a HEURISTIC, and a
+  // dangerous one. `transition()` writes state.json first and the DB second, so a transient
+  // patchTask failure (a dropped socket; we have had those) leaves the DB holding a stale null
+  // while local holds the new error. On the next poll that heuristic would fire on a task nobody
+  // touched, and it would delete BUILD_DONE and throw away the Claude session — destroying a
+  // perfectly good build to "recover" from a retry that never happened.
+  //
+  // So use the one transition only a human can cause: the task was DEAD locally (FAILED or
+  // NEEDS_HUMAN — states the worker never leaves on its own) and the DB says it is alive again.
+  // Nothing but the retry endpoint resurrects a task, and no dropped write can fake it.
+  const wasDead = s.pipelineState === S.FAILED || s.pipelineState === S.NEEDS_HUMAN;
+  const nowAlive = row.pipeline_state !== S.FAILED && row.pipeline_state !== S.NEEDS_HUMAN;
+  if (!wasDead || !nowAlive) return;
+
+  const wasBlocked = isCategoryBlock(s.lastError);
+
+  if (wasBlocked) {
+    const design = readDesign(ws);
+    ctx.log(
+      `↻ retry after a category block — discarding the anchored session and forcing a NEW design` +
+        (design ? ` (axis "${design.gradingAxis}" is now on the rejected list)` : ""),
+    );
+    // Force BUILD_RUNNING to actually spend a turn. Without this the retry is a no-op.
+    rmSync(join(ws, ".pipeline", "BUILD_DONE"), { force: true });
+    rmSync(join(ws, ".pipeline", "design.json"), { force: true });
+  }
+
+  patchState(ws, {
+    attempt: 0,
+    lastError: null,
+    lastFailureSig: null,
+    sameFailureCount: 0,
+    // A human looked at it and said "go again". The exploration budget starts over — otherwise a
+    // task that had already spent its streak would be declared OUT OF IDEAS on its first new gate,
+    // and the Retry button would do nothing but re-print the message the human just dismissed.
+    // The LEDGER survives (that is the whole point — it must not re-propose a rejected design);
+    // only the budget resets.
+    blockedStreak: 0,
+    // A fresh session, but ONLY for a category block. Every other failure (a ruff error, a
+    // broken oracle) is a defect in a good task, and the session that built it is the cheapest
+    // thing that can fix it — throwing away its context there would be pure waste.
+    ...(wasBlocked ? { claudeSessionId: null } : {}),
+  });
 }
 
 async function transition(
@@ -165,6 +358,11 @@ async function transition(
   });
   ctx.log(`${row.slug ?? row.task_id}  ${stateName(from)} → ${stateName(to)}${ev.message ? `  · ${ev.message}` : ""}`);
 
+  // Ping Slack when this transition lands the task on a human. Fire-and-forget and self-swallowing:
+  // notifyHuman never throws, so a dead Slack cannot unwind a committed transition (same rule as the
+  // editor close below).
+  void maybeNotify(ctx, row, ws, to, ev.message);
+
   // The window's job is done. Closing is best-effort and must never fail a transition — the state
   // machine has already committed, and a stuck window is not worth unwinding it for.
   if (EDITOR_DONE.includes(to)) {
@@ -178,6 +376,34 @@ async function transition(
 async function fail(ctx: Ctx, row: TerminusRow, ws: string, stage: any, err: string, needsHuman = false): Promise<void> {
   patchState(ws, { lastError: err });
   await transition(ctx, row, ws, needsHuman ? S.NEEDS_HUMAN : S.FAILED, { stage, message: err.split("\n")[0] });
+}
+
+/** Map the states where the pipeline blocks on a person to a Slack notification kind. */
+const NOTIFY_STATE: Partial<Record<number, import("./notify/slack.ts").NotifyKind>> = {
+  [S.NEEDS_HUMAN]: "needs-human",
+  [S.FAILED]: "failed",
+  [S.AWAITING_APPROVAL]: "awaiting-approval",
+  [S.AWAITING_REVIEW_APPROVAL]: "awaiting-review-approval",
+};
+
+/**
+ * Announce a "needs a human" transition to Slack, if configured for that kind. Reads the latest
+ * lastError off disk for the "why". Never throws — notifyHuman swallows its own failures.
+ */
+async function maybeNotify(ctx: Ctx, row: TerminusRow, ws: string, to: number, message?: string): Promise<void> {
+  const kind = NOTIFY_STATE[to];
+  if (!kind) return;
+  const cfg = slackConfig(ctx.cfg.slack);
+  if (!cfg.enabled || !(ctx.cfg.slack?.notifyOn ?? []).includes(kind)) return;
+
+  const r = await notifyHuman(cfg, {
+    kind,
+    slug: row.slug ?? row.task_id,
+    title: row.title ?? undefined,
+    message: readState(ws)?.lastError ?? message,
+    consoleUrl: process.env.CONSOLE_URL, // optional; a bare "open the console" otherwise
+  });
+  if (!r.ok) ctx.log(`⚠ Slack notify failed: ${r.error}`);
 }
 
 /**
@@ -238,6 +464,13 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
       updatedAt: new Date().toISOString(),
     });
   }
+
+  // A human pressed Retry. state.json is only seeded from the DB `if (!existing)` above, so
+  // without this the retry's cleared last_error never reaches the file that actually drives the
+  // pipeline — and a category-blocked task would re-enter BUILD_RUNNING, find BUILD_DONE still on
+  // disk, skip Claude entirely, and land back in NEEDS_HUMAN with the identical verdict.
+  if (existing) reconcileRetry(ctx, ws, row, existing);
+
   const st = (): LocalState => readState(ws)!;
 
   switch (row.pipeline_state) {
@@ -289,6 +522,15 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
           openEditor: cfg.worker.openEditor,
           studyTimeoutMin: cfg.claude.studyTimeoutMin,
           buildTimeoutMin: cfg.claude.buildTimeoutMin,
+          // Everything the classifier has already rejected for this task. A rebuild that does
+          // not know what was already tried is condemned to try it again — which is exactly
+          // what happened: three rebuilds, three domains, one grading axis, four rejections.
+          rejectedDesigns: st().rejectedDesigns ?? [],
+          designRounds: cfg.retries.designRounds ?? 4,
+          designTimeoutMin: cfg.claude.designTimeoutMin ?? 15,
+          // The SAME model the real gate uses. A design gate judging with a different model is a
+          // different gate, and its approval would predict nothing about the real verdict.
+          classifierModel: cfg.claude.classifierModel,
           onSessionId: async (id) => {
             // Durable before anything else. This is what makes a long build survivable.
             patchState(ws, { claudeSessionId: id });
@@ -394,38 +636,117 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
         return true;
       }
 
+      // The streak means CONSECUTIVE category blocks. A failure of any other kind (a ruff error,
+      // a broken oracle) is not a block, and letting it sit inside the streak would mean a task
+      // that got blocked once, then failed lint twice, then got blocked once more would read as
+      // "two designs blocked in a row" — which is false, and would march it toward OUT OF IDEAS
+      // on evidence that does not exist.
+      if (!isCategoryBlock(s.lastError) && (s.blockedStreak ?? 0) > 0) {
+        patchState(ws, { blockedStreak: 0 });
+      }
+
       const stuckAt = cfg.retries.stuckAfterIdenticalFailures ?? 3;
-      const sig = failureSignature(s.lastError);
+      const sig = failureSignature(s.lastError, ws);
       const repeats = sig && sig === s.lastFailureSig ? (s.sameFailureCount ?? 0) + 1 : 1;
       patchState(ws, { lastFailureSig: sig, sameFailureCount: repeats });
 
+      // A blocked design goes into the ledger BEFORE anything else looks at it, so the next
+      // redesign is handed the whole history rather than only the latest rejection. Nothing used
+      // to record this at all — the four rejections that killed this task left literally zero
+      // structured evidence behind (verify.ts wrote classifier.json only on the PASS branch), so
+      // every redesign started blind and re-proposed what had already failed.
+      if (isCategoryBlock(s.lastError)) {
+        await recordRejectedDesign(ctx, ws, s);
+      }
+
+      const s3 = st();
+      const blockedStreak = s3.blockedStreak ?? 0;
+      const exploreBudget = cfg.retries.maxBlockedDesigns ?? 6;
+
+      // TWO different ways to be done, and they are NOT the same thing. Conflating them is what
+      // produced a confidently false accusation of circling against a task that had rebuilt
+      // itself twice.
+      //
+      //   repeats >= stuckAt      the SAME DESIGN failed the same way again. Genuinely circling.
+      //   blockedStreak >= budget N DIFFERENT designs were all blocked. Honest failure, not
+      //                           circling — and it deserves to be described as what it is.
       if (repeats >= stuckAt) {
-        // NOT a failure — a question. The fix loop has produced the identical failure N times, so
-        // whatever it is doing is not working, and another turn of the same crank will not help.
-        // ask.ts exists for exactly this: stop, show a human the wall we keep hitting, and let them
-        // redirect. The task stays alive and its session keeps its context.
         await fail(
           ctx, row, ws, "verify",
-          `STUCK: the gate has failed the SAME way ${repeats} times in a row (${s.attempt + 1} attempts total).\n\n` +
-            `Retries are uncapped, so this is not a counter running out — it is the fix loop going in ` +
-            `circles. Another turn of the same crank will produce the same failure and spend more ` +
-            `rate limit for nothing.\n\n` +
+          `STUCK: the SAME design has failed the same way ${repeats} times in a row ` +
+            `(${s.attempt + 1} attempts total).\n\n` +
+            `This is not a counter running out — retries are uncapped. It is the fix loop going in ` +
+            `circles: the grading axis did not change between attempts, so neither did the verdict.\n\n` +
             `The wall we keep hitting:\n${s.lastError ?? "(none)"}\n\n` +
-            `Retry to try again anyway, or change the task and retry.`,
-          true, // NEEDS_HUMAN — the machine has run out of ideas, which is a thing to say out loud.
+            `Retry to try again — a retry now DISCARDS the anchored session and forces a genuinely ` +
+            `new design, with every rejected design on record so it cannot propose one of them again.`,
+          true,
         );
         return true;
       }
 
-      // Increment BEFORE the fix call: a crash inside FIX_RUNNING then burns one attempt, which is
+      const ledger = s3.rejectedDesigns ?? [];
+      const exhausted = isCategoryBlock(s.lastError) && axesExhausted(declaredCategory(ws), ledger);
+
+      if (isCategoryBlock(s.lastError) && (blockedStreak >= exploreBudget || exhausted)) {
+        const tried = ledger
+          .map((r) => `  • axis "${r.gradingAxis}" — blocked as ${r.predicted} (${r.confidence})`)
+          .join("\n");
+        await fail(
+          ctx, row, ws, "verify",
+          (exhausted
+            ? `OUT OF IDEAS: every grading axis this category can legally use has now been tried, ` +
+              `and every one was blocked.\n\n`
+            : `OUT OF IDEAS: ${blockedStreak} genuinely DIFFERENT designs have all been blocked.\n\n`) +
+            `This is NOT the fix loop going in circles. Each of these was a different design, and ` +
+            `the pipeline rebuilt the task for each one. The task as briefed may simply have no ` +
+            `shape that fits its assigned category.\n\nWhat has been tried:\n${tried}\n\n` +
+            `The wall:\n${s.lastError ?? "(none)"}\n\n` +
+            `A human should decide whether this task belongs in a different category, or should be ` +
+            `dropped. Retry to keep exploring anyway.`,
+          true,
+        );
+        return true;
+      }
+
+      // Increment BEFORE the call: a crash inside the next state then burns one attempt, which is
       // the fail-safe direction.
       patchState(ws, { attempt: s.attempt + 1 });
+
+      // A BLOCKED CATEGORY IS A REBUILD, NOT A FIX — AND A REBUILD NEEDS A FRESH SESSION.
+      //
+      // This used to go to FIX_RUNNING with `08-redesign.md` and `sessionId: claudeSessionId` —
+      // i.e. it asked the session that had just authored the rejected design to redesign it, in
+      // the same conversation, with all of its own prior reasoning still in context. It ran twice
+      // and produced two more designs on the identical grading axis. The prompt even instructed it
+      // to "read instruction.md ALONE — no memory of what you just did", which is not something a
+      // resumed session can do, however sincerely it tries.
+      //
+      // So a category block now re-enters BUILD_RUNNING, which is the only path that:
+      //   • starts a FRESH session (the anchor is gone),
+      //   • re-runs the study turn, so the corrected playbook is actually re-read,
+      //   • runs the DESIGN GATE, with the ledger of everything already rejected,
+      //   • and has onSessionId wired, so the new session id is persisted rather than dropped.
+      //     (fixTask returns void and never reads back a new session id — handing it a null
+      //     session would have silently orphaned the conversation every later stage depends on.)
+      if (isCategoryBlock(s.lastError)) {
+        rmSync(join(ws, ".pipeline", "BUILD_DONE"), { force: true });
+        rmSync(join(ws, ".pipeline", "design.json"), { force: true });
+        patchState(ws, { claudeSessionId: null, explanations: null });
+        await transition(ctx, row, ws, S.BUILD_RUNNING, {
+          stage: "build",
+          message:
+            `blocked category — REBUILDING from a fresh session with a new design ` +
+            `(attempt ${s.attempt + 2}, ${ledger.length} design(s) already rejected)`,
+        });
+        return true;
+      }
+
       await transition(ctx, row, ws, S.FIX_RUNNING, {
         stage: "fix",
         message:
           `gate failed — attempt ${s.attempt + 2}` +
-          (capped ? ` of ${cfg.retries.verifyAttempts}` : " (uncapped)") +
-          (isCategoryBlock(s.lastError) ? " · REDESIGN (blocked category)" : ""),
+          (capped ? ` of ${cfg.retries.verifyAttempts}` : " (uncapped)"),
       });
       return true;
     }
@@ -437,22 +758,23 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
         message: "feeding the docker failure back to the build session",
       });
       try {
-        // A BLOCKED CATEGORY IS NOT A BUG YOU PATCH — IT IS A TASK YOU REBUILD.
+        // FIX_RUNNING is for DEFECTS IN A GOOD TASK — a ruff error, an unpinned image, a wrong
+        // codebase_size, a broken oracle. For those, 03-fix.md is exactly right ("read the failure,
+        // fix that, do not change the task") and the session that built the task is the cheapest
+        // thing that can repair it: throwing away its context here would be pure waste.
         //
-        // Everything else the gate rejects (a ruff error, an unpinned image, a wrong
-        // codebase_size, a broken oracle) is a defect in an otherwise-correct task, and 03-fix.md
-        // is right for it: "read the failure, fix that, do not change the task."
+        // A BLOCKED CATEGORY NEVER REACHES THIS STATE ANY MORE. It used to, and it was routed here
+        // with 08-redesign.md and the ORIGINAL SESSION ID — which asked the author of the rejected
+        // design to redesign it inside its own conversation, with all of its prior reasoning still
+        // in context. It obliged, twice, with two more designs on the identical grading axis.
         //
-        // A classifier block is the opposite. The task is *working* — it built, and if the gate had
-        // reached Docker it would probably have passed. What is wrong is WHAT IT ASKS FOR. Handing
-        // that to a prompt whose whole message is "only fix what the check complains about" invites
-        // the model to edit task.toml and call it done, which is precisely the thing that cannot
-        // work: the classifier never reads task.toml.
-        const blocked = isCategoryBlock(s2.lastError);
+        // A blocked category is not a defect in a good task; it is the wrong task. VERIFY_FAILED
+        // now sends it to BUILD_RUNNING with a fresh session, a re-read playbook, the design gate
+        // and the ledger of everything already rejected. See the note there.
         await fixTask({
           workspace: ws,
           sessionId: s2.claudeSessionId,
-          template: blocked ? "08-redesign.md" : "03-fix.md",
+          template: "03-fix.md",
           vars: {
             attempt: s2.attempt,
             maxAttempts: cfg.retries.verifyAttempts || "unlimited",
@@ -696,13 +1018,29 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
 
     case S.FEEDBACK_FAILED: {
       const s = st();
-      if (s.feedbackAttempt + 1 >= cfg.retries.feedbackAttempts) {
+
+      // `0` MEANS UNLIMITED — the same convention verifyAttempts uses eight hundred lines up
+      // (`const capped = cfg.retries.verifyAttempts > 0`). This branch never applied it, and the
+      // arithmetic was merciless: with feedbackAttempts = 0, `0 + 1 >= 0` is TRUE, so the FIRST
+      // Snorkel CI failure went straight to terminal FAILED.
+      //
+      // The consequences were entirely invisible. REMOTE_FIX_RUNNING was unreachable, which means
+      // 05-feedback-fix.md — the prompt whose whole job is to fix what Snorkel's own checks
+      // rejected — HAS NEVER ONCE RUN. The operator set 0 to mean "keep trying until it passes",
+      // and it silently meant "give up immediately", on the one loop where giving up costs a
+      // submission slot.
+      const capped = cfg.retries.feedbackAttempts > 0;
+      if (capped && s.feedbackAttempt + 1 >= cfg.retries.feedbackAttempts) {
         await fail(ctx, row, ws, "feedback",
           `Snorkel's checks failed ${cfg.retries.feedbackAttempts}x. Last output:\n${s.lastError ?? "(none)"}`);
         return true;
       }
       patchState(ws, { feedbackAttempt: s.feedbackAttempt + 1 });
-      await transition(ctx, row, ws, S.REMOTE_FIX_RUNNING, { stage: "fix" });
+      await transition(ctx, row, ws, S.REMOTE_FIX_RUNNING, {
+        stage: "fix",
+        message: `Snorkel's checks failed — remote fix attempt ${s.feedbackAttempt + 1}` +
+          (capped ? ` of ${cfg.retries.feedbackAttempts}` : " (uncapped)"),
+      });
       return true;
     }
 

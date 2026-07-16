@@ -36,6 +36,7 @@ import { RateLimited, looksRateLimited } from "./errors.ts";
 import { askHuman, blockedCount, clearQuestion } from "./ask.ts";
 import { judge } from "./guard.ts";
 import { subscriptionEnv } from "./no-billing.ts";
+import { slackConfig, notifyHuman } from "../notify/slack.ts";
 import { Semaphore } from "../util/semaphore.ts";
 import { loadConfig } from "../config.ts";
 
@@ -309,6 +310,14 @@ async function runTurnInner(args: RunTurnArgs): Promise<TurnResult> {
             timeoutMin: askTimeoutMin,
             signal: abort.signal,
             onProgress: args.onProgress,
+            // Ping Slack the moment the question goes live, so a human need not be watching the
+            // console. notifyHuman never throws; fire-and-forget.
+            onAsked: ({ slug, question }) => {
+              const scfg = loadConfig().slack;
+              if (scfg?.enabled && (scfg.notifyOn ?? []).includes("question")) {
+                void notifyHuman(slackConfig(scfg), { kind: "question", slug, message: question });
+              }
+            },
           });
           questionsAsked += 1;
           if (a.by === "timeout") timedOutQuestions += 1;

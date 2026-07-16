@@ -6,6 +6,18 @@ pls build the task for this task:
 **Sub-categories:** {{sub_category}}  →  task.toml `subcategories = {{toml_subcategories}}`
 **Languages:** {{languages}}  →  task.toml `languages = {{toml_languages}}`
 
+## What `{{toml_category}}` actually requires
+
+This is the authoritative definition, and it is the only thing the classifier's verdict turns on. Read it before you write anything.
+
+{{categorySpec}}
+
+## The design you already committed to, and cleared the classifier with
+
+You stated this design and it was classified clean **before** you were allowed to build. Your job now is to **realise it** — not to reopen it. In particular: write the tests you named, and do not add a test that grades output-equality.
+
+{{approvedDesign}}
+
 **Description**
 
 {{description}}
@@ -79,9 +91,11 @@ Worked example — same title, same dossier, same C++/SQLite, same difficulty:
 |---|---|
 | "migrate.cpp is producing wrong output; grayscale means are incorrect and records retire too aggressively; fix the code" | "Serving now emits v3 features; the store still holds v2 features, so models train skewed against production. Rematerialize the store under the v3 definition." |
 | `// DEFECT #1: WRONG threshold (30, should be 45)` in the source | `config/feature_spec_v2.json` shipped and labelled *"the definition the legacy store was materialized under"* — correct for v2, and the agent's **reference distribution**, not its target |
-| Deliverable: a corrected `.cpp` | Deliverables: `feature_spec_v3.json` the agent authors from the dossier; a rematerialized feature DB; `feature_drift.json` (per-stratum mean/std/**PSI** v2→v3); `cohort_report.json` (class balance vs the export appendix's targets); `calibration.json` (the threshold meeting the target operating point); provenance/lineage on every row |
-| Graded on: "the constant is now 45" | Graded on: the PSI, the per-class counts, the selected operating point — *numbers describing data and model behaviour* |
-| `test_retirement_uses_45_day_threshold` | `test_cohort_retention_window`, `test_grayscale_stratum_psi`, `test_defective_class_share_meets_export_targets` |
+| Deliverable: a corrected `.cpp` | Deliverable: **a classifier that hits a stated operating point.** The agent derives the current feature definition and decision threshold from the dossier and must make the model *behave* to target on data it has never seen. |
+| Graded on: "the constant is now 45" | Graded on: **recall ≥ 0.95 at maximum precision, on a held-out slice generated at test time** — a property of the model, re-derived by the verifier, never a file compared to a reference |
+| `test_retirement_uses_45_day_threshold` | `test_threshold_achieves_recall_0_95`, `test_precision_at_operating_point_beats_baseline`, `test_calibration_error_within_tolerance` |
+
+**Do not miss what changed in that right-hand column**, because an earlier version of this table got it wrong and cost three rebuilds: the ML side does **not** ship `feature_drift.json` / `cohort_report.json` / a rematerialized DB and grade whether those files are correct. That is ETL with ML nouns on it, and it is **blocked**. The ML side ships **a number describing how the model behaves**, and grades *that*.
 
 Note what is **absent** from the right-hand column: *bug, fix, broken, wrong, incorrect, defect, debug, something is off, complaints*. And what is **present**: *rematerialize, feature definition, serving skew, cohort, class balance, drift, calibration, operating point, lineage, reproducible*.
 
@@ -89,7 +103,13 @@ Note what is **absent** from the right-hand column: *bug, fix, broken, wrong, in
 
 The **deliverable must be an artifact of that discipline** and the **success criteria must be stated in that discipline's own terms**. At least **two** of the category's core verbs must be the substance of the task — not decoration around a code fix.
 
-- **machine-learning** — feature engineering / feature pipelines; dataset & cohort construction (splits, sampling, class balance, leakage, point-in-time correctness); model evaluation (precision/recall, PR-AUC, confusion matrix, per-stratum metrics); calibration & threshold selection (ECE, Brier, reliability, "max precision subject to recall ≥ 0.95"); drift & skew (PSI, KS, training/serving skew); inference / batch scoring; lineage & reproducibility; feature-store operations (materialization, backfill, definition migration). The "error" being addressed must be a **data/model/distribution** error, never a code error.
+- **machine-learning** — the deliverable is **a statement about model behaviour**, and it is graded on **model-quality metrics**: precision/recall, PR-AUC, a confusion matrix at a chosen threshold, calibration error, an operating point that hits a stated target ("max precision subject to recall ≥ 0.95").
+
+  **NOT feature pipelines.** Materializing a feature store, backfilling it, migrating a feature definition, computing features to a spec, even computing drift across two datasets — every one of those is graded on whether the **output data** is correct, and that is **data-processing, which is BLOCKED**. ML vocabulary around an ETL deliverable is the single most common way this pipeline gets a task rejected. The classifier reads the deliverable, not the nouns.
+
+  The test that tells you which side you are on:
+  - `assert average_precision(deployed, heldout) >= BASELINE` → a model property. **In-category.**
+  - `assert json.load(out) == oracle.decide(inputs)` → an output artifact. **Blocked**, whatever the file is called.
 - **security** — the deliverable is a policy, a hardened configuration, an exploit-resistant boundary, an audit finding with evidence; graded on what an attacker can and cannot now do.
 - **scientific-computing** — the deliverable is a numerical result, a simulation, a solver, a reproducible computation; graded on numerical correctness/stability/convergence against a reference.
 - **system-administration** — the deliverable is a configured, converged, observable system; graded on the system's end state.
@@ -156,13 +176,12 @@ Do not report success on the basis of having written plausible-looking code. If 
 
 ## How to signal that you are done
 
-The automation does not read this chat. It watches the filesystem.
+The automation does not read this chat. It watches the filesystem — and it decides for itself
+whether you are finished. **You do not write any completion marker.** Do not create
+`.pipeline/BUILD_DONE`; that file is the automation's, and it writes it only after it has checked
+the manifest itself. A marker you write is a claim; a marker it writes is evidence, and it is not
+interested in your claim.
 
-When the task is **genuinely finished and you have seen `reward.txt` contain `1` with the
-solution and `0` without it**, write the file `.pipeline/BUILD_DONE` in this workspace. Put
-in it one line saying what the task requires and which specific failure mode you designed it
-to exploit.
-
-Do not write that file before the task is actually complete. Writing it early does not make
-the build finish early — it just means the gate catches an unfinished task and hands it
-straight back to you.
+You are done when the tree is genuinely finished and you have seen `reward.txt` contain `1` with
+the solution applied and `0` without it. Just stop there. If anything is missing, the gate will
+hand it straight back to you with the list.

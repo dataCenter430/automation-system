@@ -55,9 +55,17 @@ export function AwaitingHuman({
   return (
     <section
       className="rail"
-      style={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 10, padding: 14 }}
+      style={{
+        background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 10,
+        // A fixed-height, sticky sidebar: the header stays put, the card list scrolls as tasks
+        // pile up, and the "New task" button is pinned to the bottom (below). `top` clears the
+        // sticky page header; `maxHeight` keeps the whole rail inside the viewport so the INNER
+        // list scrolls rather than the page — which is what keeps the button always in reach.
+        display: "flex", flexDirection: "column", padding: 0,
+        position: "sticky", top: 74, maxHeight: "calc(100vh - 92px)",
+      }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "14px 14px 10px", flex: "none" }}>
         <span className="hdr">Awaiting human</span>
         <span
           className="mono num"
@@ -72,6 +80,15 @@ export function AwaitingHuman({
         </span>
       </div>
 
+      {/* THE SCROLL REGION. Everything that grows with the fleet lives here; the header above and
+          the New task button below stay fixed, so no amount of waiting tasks pushes the button
+          off-screen. */}
+      <div
+        style={{
+          flex: 1, minHeight: 0, overflowY: "auto",
+          padding: "0 14px 12px", display: "flex", flexDirection: "column", gap: 8,
+        }}
+      >
       {/* The live questions, first. The answer box is in the centre column — this is the
           pointer to it, and the reason the count above is not zero. */}
       {asking.length > 0 && (
@@ -212,14 +229,18 @@ export function AwaitingHuman({
           })}
         </div>
       )}
+      </div>{/* end scroll region */}
 
+      {/* STICKY BOTTOM. Outside the scroll region, so it never moves however long the list gets. */}
       <a
         href="/tasks"
         className="mono"
         style={{
-          display: "block", marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--line)",
-          fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase",
-          color: "var(--brand)", textDecoration: "none",
+          flex: "none", display: "block", textAlign: "center",
+          padding: "12px 14px", borderTop: "1px solid var(--line)",
+          fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", fontWeight: 700,
+          color: "var(--brand)", textDecoration: "none", background: "var(--panel)",
+          borderRadius: "0 0 10px 10px",
         }}
       >
         + New task

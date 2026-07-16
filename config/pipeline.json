@@ -1,9 +1,12 @@
 {
   "snorkel": {
     "$ahtChoices": "'How long did it take you to complete this submission?' \u2014 minutes. A required field whose honest answer we do not have: Snorkel is asking what the task cost a PERSON, and our wall-clock is not that number. The operator supplies the spread and we pick from it at random. It is a spread rather than a constant because the same number on every submission, forever, is itself a signal. A real human revision in the live DOM used 200.",
-    "ahtChoices": [180, 200, 220]
+    "ahtChoices": [
+      180,
+      200,
+      220
+    ]
   },
-
   "paths": {
     "$comment": "${SNORKEL_ROOT} defaults to the repo's parent folder and can be overridden in .env. No absolute paths here \u2014 this system runs on a different machine than it is developed on.",
     "workspace": "${REPO_ROOT}/workspace",
@@ -13,18 +16,15 @@
   },
   "retries": {
     "$comment": "Two independent fix loops. verify = local Docker gate. feedback = Snorkel's own static checks.",
-
-    "$unlimited": "0 means NO CAP — keep fixing until the task passes. The operator's rule: 'do not set retry max as 3, it should re-try until the task is completed successfully.' They are right: a cap turns a task that needed five attempts into a dead task, and the work already spent is thrown away. A build that is making progress should not be killed by a counter.",
-
-    "$butNotForever": "Unlimited is not the same as blind. An infinite loop on a task that CANNOT be fixed would burn the subscription's rate limit for nothing, and rate limit is the one thing this system actually spends. So the loop stops when it stops MAKING PROGRESS: if the gate fails the same way `stuckAfterIdenticalFailures` times in a row, the task does not fail — it ASKS YOU (see claude/ask.ts). A machine that is going in circles should say so, not keep going.",
-
+    "$unlimited": "0 means NO CAP \u2014 keep fixing until the task passes. The operator's rule: 'do not set retry max as 3, it should re-try until the task is completed successfully.' They are right: a cap turns a task that needed five attempts into a dead task, and the work already spent is thrown away. A build that is making progress should not be killed by a counter.",
+    "$butNotForever": "Unlimited is not the same as blind. An infinite loop on a task that CANNOT be fixed would burn the subscription's rate limit for nothing, and rate limit is the one thing this system actually spends. So the loop stops when it stops MAKING PROGRESS: if the gate fails the same way `stuckAfterIdenticalFailures` times in a row, the task does not fail \u2014 it ASKS YOU (see claude/ask.ts). A machine that is going in circles should say so, not keep going.",
     "verifyAttempts": 0,
     "feedbackAttempts": 0,
     "explainAttempts": 3,
-
-    "$explainAttempts": "Explanations DO keep a cap. They are a style-validator loop over prose, not a task rebuild — if three attempts cannot produce explanations that read like a human wrote them, a fourth will not either, and there is nothing to make progress ON.",
-
-    "stuckAfterIdenticalFailures": 3
+    "$explainAttempts": "Explanations DO keep a cap. They are a style-validator loop over prose, not a task rebuild \u2014 if three attempts cannot produce explanations that read like a human wrote them, a fourth will not either, and there is nothing to make progress ON.",
+    "stuckAfterIdenticalFailures": 3,
+    "designRounds": 4,
+    "maxBlockedDesigns": 6
   },
   "claude": {
     "$comment": "Auth comes from the logged-in Claude Code CLI (~/.claude), NOT an API key. The Agent SDK spawns that CLI, so the worker must run as the OS user that is signed in.",
@@ -42,7 +42,8 @@
     "$classifierModel": "Snorkel's CI build log literally prints: export REVIEW_MODEL=\"claude-haiku-4-5\". So the gate asks the SAME model the SAME question before we upload. That is the difference between a gate that approximates Snorkel and one that agrees with it.",
     "classifierModel": "claude-haiku-4-5",
     "$askHumanTimeoutMin": "How long a build waits when it asks you a question (the ask_human tool -> the dashboard's Human panel). A parked question HOLDS ITS CLAUDE SLOT, so this is the blast radius of nobody being at the desk: at 6 slots and a 30-minute timeout, three unanswered questions cost you half the fleet for half an hour, and no longer. On timeout the tool does not error - it tells Claude to use its best judgment and to say in its final message what it decided alone.",
-    "askHumanTimeoutMin": 30
+    "askHumanTimeoutMin": 30,
+    "designTimeoutMin": 15
   },
   "docker": {
     "$comment": "Mirrors task.toml [environment]; --network none reproduces allow_internet=false at test time.",
@@ -72,5 +73,44 @@
     "requireNullReward": 0,
     "requireLintClean": true,
     "requireSolveProbeFails": true
+  },
+  "stb": {
+    "$comment": "The sanctioned Snorkel CLI. projectId is EMPTY until the operator runs `stb login` + `stb projects list` and pastes the Terminus project id here. stb-backed stages refuse to run while it is empty rather than guess. See scripts/stb-probe.sh.",
+    "projectId": "",
+    "timePolicy": [
+      180,
+      200,
+      220
+    ],
+    "difficulty": {
+      "models": [
+        "@openai/gpt-5.5",
+        "@anthropic/claude-opus-4-8"
+      ],
+      "runsPerModel": 5,
+      "rejectAboveWorst": 0.8,
+      "hardAtOrBelow": 0.2,
+      "mediumAtOrBelow": 0.6,
+      "blockEasy": true,
+      "pythonMustBeHard": true
+    },
+    "queue": {
+      "revisionCap": 10,
+      "dailyNetNew": 2
+    },
+    "pollStatusSec": 60,
+    "reconcileIntervalSec": 3600
+  },
+  "slack": {
+    "$comment": "Slack 'needs a human' pings. Token is NOT here \u2014 it is a secret in .env as SLACK_BOT_TOKEN. enabled=false makes every notify a no-op. notifyOn selects which blocking moments to announce.",
+    "enabled": true,
+    "channelId": "C0BHPNC8LJ0",
+    "notifyOn": [
+      "needs-human",
+      "failed",
+      "question",
+      "awaiting-approval",
+      "awaiting-review-approval"
+    ]
   }
 }

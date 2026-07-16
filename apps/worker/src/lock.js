@@ -27,18 +27,52 @@ export class AlreadyRunning extends Error {
 }
 export function acquire() {
     mkdirSync(dirname(LOCK), { recursive: true });
-    if (existsSync(LOCK)) {
-        const pid = Number(readFileSync(LOCK, "utf8").trim());
-        if (Number.isFinite(pid) && pid !== process.pid && isAlive(pid)) {
-            throw new AlreadyRunning(`A worker is already running (pid ${pid}).\n` +
-                `Two workers would drive the same task at once — racing on state and, worst case, ` +
-                `double-submitting.\n\n` +
-                `Stop the other one, or if you are sure it is dead:\n  ` +
-                (process.platform === "win32" ? `del "${LOCK}"` : `rm "${LOCK}"`));
-        }
-        // Stale lock from a worker that was killed. Safe to take over.
+    // The claim must be ATOMIC, not existsSync-then-write.
+    //
+    // The old shape checked for the file, found none, and wrote — three separate syscalls with
+    // gaps between them. Two workers started close together (a service wrapper retrying, a
+    // scheduled run overlapping a manual one, `npm run worker` twice) both saw no lock, both
+    // wrote their pid, and both proceeded. The DB's compare-and-swap in claimNextTask() does not
+    // save you there, because sweep() recovers CRASHED_MIDFLIGHT rows WITHOUT going through it:
+    // both workers would resume the same Claude session, in the same workspace, racing on the
+    // same state.json.
+    //
+    // flag "wx" is O_CREAT|O_EXCL: the kernel creates the file or fails. Exactly one wins.
+    const stamp = `${process.pid}\n`;
+    try {
+        writeFileSync(LOCK, stamp, { encoding: "utf8", flag: "wx" });
+        return;
     }
-    writeFileSync(LOCK, String(process.pid), "utf8");
+    catch (e) {
+        if (e.code !== "EEXIST")
+            throw e;
+    }
+    // Someone holds it. Is that someone still alive?
+    const pid = Number(readFileSync(LOCK, "utf8").trim());
+    if (Number.isFinite(pid) && pid !== process.pid && isAlive(pid)) {
+        throw new AlreadyRunning(`A worker is already running (pid ${pid}).\n` +
+            `Two workers would drive the same task at once — racing on state and, worst case, ` +
+            `double-submitting.\n\n` +
+            `Stop the other one, or if you are sure it is dead:\n  ` +
+            (process.platform === "win32" ? `del "${LOCK}"` : `rm "${LOCK}"`));
+    }
+    // A stale lock from a worker that was killed. Take it over — but do so by removing and
+    // re-creating exclusively, so two processes racing to reclaim the SAME stale lock still
+    // resolve to exactly one winner.
+    try {
+        unlinkSync(LOCK);
+    }
+    catch { /* another process got there first; the create below will decide it */ }
+    try {
+        writeFileSync(LOCK, stamp, { encoding: "utf8", flag: "wx" });
+    }
+    catch (e) {
+        if (e.code === "EEXIST") {
+            throw new AlreadyRunning("Another worker took the lock while this one was reclaiming it as stale. " +
+                "That is the lock doing its job — start only one worker.");
+        }
+        throw e;
+    }
 }
 export function release() {
     try {

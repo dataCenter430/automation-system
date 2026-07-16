@@ -19,6 +19,7 @@ When you have fixed it, **run it yourself before saying so**: build the image, r
 The gate will run again the moment you finish, and if it fails you will see this message again. Checking it yourself first is strictly cheaper.
 
 
-When the fix is done and you have re-run the oracle and the null run yourself, write
-`.pipeline/BUILD_DONE` again (overwrite it) with a one-line note on what you changed. The
-automation watches that file, not this chat.
+When the fix is done and you have re-run the oracle and the null run yourself, just stop. **Do not
+write any completion marker** — `.pipeline/BUILD_DONE` belongs to the automation, which writes it
+only after checking the tree itself. The gate re-runs the moment your turn ends and judges the
+files, not this chat.

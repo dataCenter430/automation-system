@@ -18,6 +18,177 @@ import { toTaskToml } from "../../../../packages/shared/src/taxonomy.ts";
 import type { ParsedTask } from "../../../../packages/shared/src/parse-task-blob.ts";
 import { seedSkeleton, unchangedFromSkeleton, type SkeletonResult } from "./skeleton.ts";
 import { openInEditor } from "../util/open-editor.ts";
+import {
+  designGate, readDesign, validateDesign, DesignInvalid, type Design,
+} from "./design-gate.ts";
+import { categorySpec } from "./categories.ts";
+import type { RejectedDesign } from "../state.ts";
+
+/** The category's authoritative definition, rendered for a prompt. */
+export function categorySpecText(category: string): string {
+  const s = categorySpec(category);
+  if (!s) return `(no spec on file for "${category}" — fall back to the playbook's section 3.)`;
+  return [
+    `**Deliverable.** ${s.deliverable}`,
+    ``,
+    `**Graded on.** ${s.gradedOn}`,
+    ``,
+    `**Test names in this category look like:**`,
+    ...s.testNamesLikeThis.map((t) => `  - \`${t}\``),
+    ``,
+    `**NOT like:** ${s.notThis}`,
+    ``,
+    `**The trap:** ${s.theTrap}`,
+  ].join("\n");
+}
+
+/** The approved design, rendered back into the build prompt so the build realises THAT. */
+export function designSummary(d: Design | null): string {
+  if (!d) return "(no design on file — build from the category spec above.)";
+  return [
+    `**Deliverable.** ${d.deliverable}`,
+    ``,
+    `**Graded on.** ${d.gradedOn}`,
+    ``,
+    `**Grading axis.** \`${d.gradingAxis}\``,
+    ``,
+    `**The tests you committed to (write these, and do not write an equality test that is not here):**`,
+    ...d.testNames.map((t) => `  - \`${t}\``),
+  ].join("\n");
+}
+
+/**
+ * THE DESIGN GATE LOOP: state a design, classify it, iterate until it is clean.
+ *
+ * The session writes `.pipeline/design.json` and stops. We classify it with the SAME panel that
+ * will judge the finished build, so a design that clears this gate is a design whose build will
+ * clear the real one. Blocked → hand the verdict straight back and ask again. Each round costs a
+ * short turn plus four Haiku calls; the thing it replaces cost up to eighteen minutes a round.
+ *
+ * If it cannot produce a clean design in `maxRounds`, we do NOT block the build. The design gate
+ * is an accelerator, not a new way to fail: the real gate still stands behind it, and a task that
+ * dies here would die there anyway — but with a Docker run's worth of evidence instead of none.
+ * We log loudly and carry on.
+ */
+async function runDesignGate(args: {
+  workspace: string;
+  declared: string;
+  ledger: RejectedDesign[];
+  maxRounds: number;
+  resume: string | null;
+  timeoutMin: number;
+  model?: string;
+  onSessionId: (id: string) => Promise<void>;
+  onProgress?: (m: string) => Promise<void>;
+}): Promise<Design | null> {
+  let resume = args.resume;
+  let feedback = "";
+
+  // A DESIGN THAT ALREADY CLEARED THE GATE IS NOT RE-OPENED.
+  //
+  // Without this, a resumed build (crash recovery, a restarted worker) re-runs the design turn from
+  // scratch — and a fresh design turn can legitimately produce a DIFFERENT design from the one the
+  // half-built tree on disk already implements. The build would then be handed a design it is not
+  // building, the drift check would fire against a tree that never agreed to it, and the resume
+  // would be strictly worse than no resume at all.
+  //
+  // The marker is the approved design itself: if design.json is on disk and still passes, that IS
+  // the approval, and re-deriving it can only introduce disagreement.
+  const onDisk = readDesign(args.workspace);
+  if (onDisk) {
+    try {
+      const d = validateDesign(onDisk);
+      const v = await designGate(d, args.declared, args.ledger, args.model);
+      if (v.ok) {
+        await args.onProgress?.(`design already approved on disk · axis "${d.gradingAxis}" — not re-opening it`);
+        return d;
+      }
+    } catch {
+      // Unusable design.json from an older build. Fall through and state a new one.
+    }
+  }
+
+  for (let round = 1; round <= args.maxRounds; round++) {
+    await args.onProgress?.(`turn 2: stating the design (round ${round}/${args.maxRounds})`);
+
+    const turn = await runTurn({
+      prompt: render("09-design.md", {
+        category: args.declared,
+        categorySpec: categorySpecText(args.declared),
+        rejectedDesigns: renderLedger(args.ledger) + feedback,
+      }),
+      cwd: args.workspace,
+      resume,
+      append: BUILD_CONTRACT,
+      timeoutMin: args.timeoutMin,
+      label: "designing",
+      onSessionId: async (id) => { resume = id; await args.onSessionId(id); },
+      onProgress: args.onProgress,
+    });
+    resume = turn.sessionId ?? resume;
+
+    let design: Design;
+    try {
+      design = validateDesign(readDesign(args.workspace));
+    } catch (e) {
+      if (!(e instanceof DesignInvalid)) throw e;
+      feedback = `\n\n## Your last design was not usable\n\n${(e as Error).message}\n`;
+      await args.onProgress?.(`design round ${round}: unusable — ${(e as Error).message}`);
+      continue;
+    }
+
+    const verdict = await designGate(design, args.declared, args.ledger, args.model);
+    if (verdict.ok) {
+      await args.onProgress?.(`✅ ${verdict.report}`);
+      return design;
+    }
+
+    await args.onProgress?.(`design round ${round} REJECTED — ${verdict.report.split("\n")[0]}`);
+    feedback = `\n\n## Your last design was REJECTED\n\n${verdict.report}\n`;
+  }
+
+  // OUT OF ROUNDS. Return NULL — never the last design.
+  //
+  // Returning readDesign() here would hand the build turn the design that was JUST REJECTED, under
+  // a heading that says "the design you already committed to, and cleared the classifier with".
+  // That is not a degraded gate, it is a lie: the build would be told a blocked design was approved
+  // and would faithfully implement it. Better to say nothing and let the build fall back to the
+  // category spec, which is at least true.
+  //
+  // We do NOT fail the task. The design gate is an accelerator, not a new way to die: the real gate
+  // still stands behind it, and a task that cannot state a clean design would have been blocked
+  // anyway — but now it is blocked with a Docker run's worth of evidence rather than none.
+  rmSync(join(args.workspace, ".pipeline", "design.json"), { force: true });
+  await args.onProgress?.(
+    `⚠️  the design gate could not reach a clean design in ${args.maxRounds} rounds. Building from ` +
+      `the category spec alone; the category classifier will still judge the result.`,
+  );
+  return null;
+}
+
+/** The ledger, rendered for a prompt. render() has no loops, so it is pre-joined here. */
+export function renderLedger(ledger: RejectedDesign[]): string {
+  if (!ledger.length) return "";
+  return [
+    `## Designs that have ALREADY been rejected — do not propose any of these again`,
+    ``,
+    `A design's identity is its GRADING AXIS plus WHAT ITS TESTS ASSERT. Change the domain, the`,
+    `nouns and the file names all you like: if the assertions are the same, it is the same design,`,
+    `and it will be rejected exactly as it was before. That is not a hypothetical — it is what`,
+    `happened here, three times.`,
+    ``,
+    `You MAY reuse an axis if you are genuinely asserting something different. You may NOT`,
+    `re-propose the same axis asserting the same things.`,
+    ``,
+    ...ledger.map(
+      (r) =>
+        `- **attempt ${r.attempt}** · axis \`${r.gradingAxis}\` · blocked as **${r.predicted}** (${r.confidence})\n` +
+        `  - deliverable: ${r.deliverable.slice(0, 180)}\n` +
+        `  - graded on: ${r.gradedOn.slice(0, 180)}\n` +
+        `  - why it was blocked: ${r.why.slice(0, 240)}`,
+    ),
+  ].join("\n");
+}
 
 /** What a finished task must physically contain. Claude's word is never the evidence. */
 export const MANIFEST = [
@@ -83,6 +254,26 @@ export interface BuildInput {
   sessionId?: string | null;
   /** Open a VS Code window on the workspace so the build can be watched in an editor. */
   openEditor?: boolean;
+
+  /**
+   * Every design the classifier has already rejected for THIS task.
+   *
+   * A rebuild that does not know what was already tried is condemned to try it again — which
+   * is precisely what happened: three rebuilds, three domains, one grading axis, four
+   * rejections. The design gate refuses any design reusing a rejected axis, and the prompt
+   * shows the session the whole ledger so it does not have to be refused to find out.
+   */
+  rejectedDesigns?: RejectedDesign[];
+  /** How many times the session may restate its design before we give up and build anyway. */
+  designRounds?: number;
+  designTimeoutMin?: number;
+  /**
+   * The model the design gate classifies with. It MUST be the same one the real gate uses —
+   * Snorkel's CI announces REVIEW_MODEL="claude-haiku-4-5" and we ask the same model the same
+   * question. A design gate judging with a different model would be a different gate, and its
+   * approval would predict nothing.
+   */
+  classifierModel?: string;
 }
 
 export interface BuildOutput {
@@ -174,8 +365,31 @@ export async function buildTask(input: BuildInput): Promise<BuildOutput> {
     await input.onProgress?.(`playbook read · $${study.costUsd.toFixed(2)}`);
   }
 
-  // ---- Turn 2: build the task ---------------------------------------------
+  // ---- Turn 2: THE DESIGN GATE --------------------------------------------
+  //
+  // State the design; have it classified; only then build. This exists because a task was
+  // rejected four times, and every rejection arrived only AFTER a full build turn — one of
+  // which ran eighteen minutes. Between them the session rebuilt the task from scratch twice,
+  // into three unrelated deliverables, all graded "the agent's output matches a reference",
+  // which is data-processing and is blocked. The domain moved every time. The grading axis
+  // never moved once.
+  //
+  // Every fact the classifier used to reject those builds was present before a single file
+  // was written. So we ask for those facts first. A blocked design now costs a paragraph.
   const toml = toTaskToml(task);
+  const design = await runDesignGate({
+    workspace,
+    declared: toml.category,
+    ledger: input.rejectedDesigns ?? [],
+    maxRounds: input.designRounds ?? 4,
+    model: input.classifierModel,
+    resume: sessionId,
+    onSessionId: async (id) => { sessionId = id; await input.onSessionId(id); },
+    onProgress: input.onProgress,
+    timeoutMin: input.designTimeoutMin ?? 15,
+  });
+
+  // ---- Turn 3: build the task ---------------------------------------------
   const build = await runTurn({
     prompt: render("02-build.md", {
       title: task.title,
@@ -188,6 +402,14 @@ export async function buildTask(input: BuildInput): Promise<BuildOutput> {
       toml_subcategories: JSON.stringify(toml.subcategories),
       toml_languages: JSON.stringify(toml.languages),
       workspace,
+      // The build session has never, until now, been shown the authoritative definition of the
+      // category it is building for. categorySpec() was called in exactly one place: inside the
+      // FAILURE message, after the task had already been built and rejected. Telling a session
+      // what its category requires only once it has got it wrong is not a system, it is a scold.
+      categorySpec: categorySpecText(toml.category),
+      // The design it just committed to, and cleared the classifier with. The build's job is to
+      // realise THIS, not to reopen the question.
+      approvedDesign: designSummary(design),
     }),
     cwd: workspace,
     resume: sessionId,
@@ -253,7 +475,7 @@ export async function buildTask(input: BuildInput): Promise<BuildOutput> {
 export async function fixTask(args: {
   workspace: string;
   sessionId: string | null;
-  template: "03-fix.md" | "05-feedback-fix.md" | "06-revise.md" | "07-rubric-fix.md" | "08-redesign.md";
+  template: "03-fix.md" | "05-feedback-fix.md" | "06-revise.md" | "07-rubric-fix.md";
   vars: Record<string, string | number>;
   timeoutMin: number;
   onProgress?: (msg: string) => Promise<void>;

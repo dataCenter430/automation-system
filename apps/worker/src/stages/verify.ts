@@ -15,8 +15,21 @@ import { join } from "node:path";
 import * as docker from "../docker/runner.ts";
 import { lintTask, formatFindings, type Finding } from "./lint.ts";
 import { normalizeLineEndings } from "../util/lf.ts";
-import { classifyTask, classifierFailure } from "./classify.ts";
+import { classifyTask, classifierFailure, type Classification } from "./classify.ts";
 import { instructionGate, formatInstructionVerdict } from "./instruction-gate.ts";
+import { designDrift, readDesign } from "./design-gate.ts";
+
+/** The test names actually on disk — what the classifier reads, and what drift is measured against. */
+function builtTestNames(taskDir: string): string[] {
+  try {
+    const p = join(taskDir, "tests", "test_outputs.py");
+    if (!existsSync(p)) return [];
+    return (readFileSync(p, "utf8").match(/^\s*def (test_\w+)/gm) ?? [])
+      .map((m) => m.trim().replace(/^def /, ""));
+  } catch {
+    return [];
+  }
+}
 
 export interface VerifyResult {
   passed: boolean;
@@ -86,6 +99,27 @@ async function stage(
   await docker.exec(name, ["chmod", "+x", "/tests/test.sh"], 30);
 }
 
+/**
+ * The classifier's verdict, written to BOTH places that need it.
+ *
+ *   runs/<slug>/verify-N/   the immutable audit trail for this attempt
+ *   <task>/.pipeline/       the working copy the rejected-design ledger reads on the next lap
+ *
+ * Written on the blocked branch as well as the passing one. The old code wrote it only when the
+ * task PASSED, so the one situation in which the verdict was actually needed — a rejection we
+ * have to learn from — was the one situation in which it was thrown away.
+ */
+function writeVerdict(taskDir: string, runDir: string, c: Classification): void {
+  const json = JSON.stringify(c, null, 2);
+  try {
+    writeFileSync(join(runDir, "classifier.json"), json, "utf8");
+    mkdirSync(join(taskDir, ".pipeline"), { recursive: true });
+    writeFileSync(join(taskDir, ".pipeline", "classifier.json"), json, "utf8");
+  } catch {
+    // Diagnostics. Losing them must never fail a gate that otherwise reached a verdict.
+  }
+}
+
 export async function verifyTask(opts: VerifyOptions): Promise<VerifyResult> {
   const { taskDir, slug, runDir } = opts;
   mkdirSync(runDir, { recursive: true });
@@ -107,6 +141,46 @@ export async function verifyTask(opts: VerifyOptions): Promise<VerifyResult> {
         `STAGE: static lint (no Docker was run)\n\n${formatFindings(lint.findings)}\n\n` +
         `Fix every BLOCKING finding above. Each names one rule and one file.`,
     };
+  }
+
+  // 1b. DESIGN DRIFT — did the build actually grade what the approved design promised to grade?
+  //
+  // The design gate is only as honest as the session that writes the design, and the session writes
+  // both. So a build could state a clean, property-graded design, clear the gate in seconds, and
+  // then quietly ship `test_output_matches_reference` anyway — arriving at the identical blocked
+  // task by a route that now has an approval stamped on it.
+  //
+  // The test names are the check, because they are exactly what the classifier reads. An
+  // equality-shaped test that the approved design never promised is drift, and it is blocking:
+  // catching it here costs milliseconds and a fix turn, where the classifier below would cost a
+  // full rebuild.
+  const approved = readDesign(taskDir);
+  if (approved) {
+    const drift = designDrift(approved, builtTestNames(taskDir));
+    for (const t of drift) {
+      lint.findings.push({
+        rule: "design_drift",
+        severity: "blocking",
+        file: "tests/test_outputs.py",
+        message:
+          `\`${t}\` grades OUTPUT EQUALITY and is not in the design you cleared the gate with. ` +
+          `The approved design (axis "${approved.gradingAxis}") promised: ${approved.testNames.join(", ")}. ` +
+          `Grade the property you committed to, or restate the design — do not smuggle an equality ` +
+          `assertion past an approval it never had.`,
+      });
+    }
+    if (drift.length) {
+      return {
+        passed: false,
+        oracleReward: null,
+        nullReward: null,
+        lint,
+        logsDir: runDir,
+        failureReport:
+          `STAGE: design drift (no Docker was run)\n\n${formatFindings(lint.findings)}\n\n` +
+          `The built tree does not grade what the approved design said it would grade.`,
+      };
+    }
   }
 
   // 2. CATEGORY CLASSIFIER — the check that actually rejected our first submission.
@@ -150,6 +224,13 @@ export async function verifyTask(opts: VerifyOptions): Promise<VerifyResult> {
         message: `classifies as "${c.predicted}" (${c.confidence.toFixed(2)}) — a blocked category. ${c.why}`,
       });
 
+      // WRITE THE VERDICT DOWN. This branch used to `return` without recording anything, so the
+      // ONLY outcome that ever produced structured evidence was the one where nothing went wrong.
+      // A task was blocked four times running and left four EMPTY verify-* directories behind —
+      // meaning every redesign began with no idea what the classifier had actually objected to,
+      // beyond one line of prose in lastError. The rejected-design ledger reads this file.
+      writeVerdict(taskDir, runDir, c);
+
       return {
         passed: false,
         oracleReward: null,
@@ -161,11 +242,7 @@ export async function verifyTask(opts: VerifyOptions): Promise<VerifyResult> {
           classifierFailure(c, declared),
       };
     } else {
-      writeFileSync(
-        join(runDir, "classifier.json"),
-        JSON.stringify(c, null, 2),
-        "utf8",
-      );
+      writeVerdict(taskDir, runDir, c);
     }
   }
 

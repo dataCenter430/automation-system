@@ -615,7 +615,55 @@ Non-negotiable details, each of which is a REAL documented rejection:
 
 Your task WILL be rejected if the solution can be copied from the test assertions.
 
-Required techniques:
+  *** READ THIS BEFORE THE TECHNIQUES BELOW. IT OVERRIDES THEM. ***
+
+  ANTI-CHEATING CONSTRAINS **HOW YOU DERIVE AN EXPECTED VALUE**.
+  IT DOES NOT CONSTRAIN **WHAT YOU ASSERT**.
+
+  These are two independent choices, and confusing them has killed real tasks:
+
+      HOW you derive it     re-compute it in the verifier from the inputs, or from a held-out
+                            case the agent has never seen. NEVER a literal in the test file.
+                            <- this, and ONLY this, is what 7.3 is about.
+
+      WHAT you assert       THE GRADING AXIS. It must match YOUR CATEGORY (section 3).
+                            <- 7.3 has NOTHING to say about this. Do not let it choose for you.
+
+  The techniques below — (b) compare to oracle.decide(), (d) re-execute the artifact,
+  (f) assert byte-identical output — all happen to pick the SAME grading axis:
+
+      "the agent's OUTPUT matches the reference OUTPUT"
+
+  That axis is the DEFINITION of data-processing, and data-processing is BLOCKED. If your
+  category is not one whose deliverable genuinely IS an output artifact, and you reach for
+  (b)/(d)/(f) as written, YOU WILL BE BLOCKED — no matter how correct, how well-engineered,
+  or how domain-appropriate the task is. Three real tasks died exactly this way, and each
+  rebuild kept the axis and changed only the nouns, because this section reads like an order.
+
+  IT IS NOT AN ORDER. Anti-cheating is fully satisfied by a PROPERTY assertion, so long as
+  the property is RE-DERIVED and not hardcoded:
+
+      BLOCKED (equality axis — data-processing, whatever the domain nouns are):
+          expected = oracle.decide(load("/app/scores"))
+          assert json.load(open("/app/out/promotion.json")) == expected
+
+      FINE (property axis — re-derived from held-out data the agent never saw, so it cannot
+            be copied from the assertions, AND it grades a model property):
+          heldout  = heldout.generate(seed=7)            # fresh, not in the container
+          deployed = run_agent_artifact(heldout)          # (d) still applies — re-execute it
+          assert average_precision(deployed, heldout) >= DEPLOYMENT_BASELINE
+          assert average_precision(deployed, heldout) >= average_precision(champion, heldout)
+
+  BOTH re-derive. BOTH are uncheatable. Only the second one is in a category Snorkel accepts.
+
+  So: choose your GRADING AXIS from your category first (section 3 / the category spec you
+  were handed), and only then use the techniques below to make that axis uncheatable.
+
+  A test whose name or assertion contains "matches_reference", "matches_golden",
+  "equals_oracle", "byte_identical", or "output_is_correct" has chosen the equality axis.
+  If your category is not data-processing, that test is a rejection waiting to happen.
+
+Required techniques (for DERIVING the expectation — not for choosing the axis):
 
   (a) RE-DERIVE, DON'T ASSERT CONSTANTS.
         BAD:  assert report["total"] == 42
@@ -624,7 +672,12 @@ Required techniques:
 
   (b) SHIP A REFERENCE ENGINE IN tests/oracle.py.
       A self-contained Python implementation of the ACTUAL rules, living only in the verifier.
-      Tests compare the agent's artifact against oracle.decide(...) rather than literals.
+      Use it to COMPUTE THE EXPECTED VALUE rather than hardcoding literals.
+
+      What you then DO with that value is the axis choice, and it is yours:
+          equality axis  ->  assert agent_output == oracle.decide(inputs)     # data-processing
+          property axis  ->  assert metric(agent_result) >= oracle.threshold(inputs)
+      The oracle is how you avoid a literal. It is NOT an instruction to assert equality.
 
   (c) SHIP A HELD-OUT GENERATOR IN tests/heldout.py.
       A deterministic seeded generator of FRESH cases that are NOT present anywhere in the
@@ -638,7 +691,15 @@ Required techniques:
       Weakening the in-container schema buys the agent nothing.
 
   (f) IDEMPOTENCY / DETERMINISM CHECK.
-      Re-run the agent's pipeline and assert the output is byte-identical.
+      Re-run the agent's pipeline and assert it lands in the SAME PLACE twice.
+
+      "The same place" is measured on YOUR AXIS, not necessarily on bytes. Byte-identity is
+      the equality axis and reads as data-processing. On a property axis, determinism means
+      the PROPERTY is stable:
+          assert abs(average_precision(run_1) - average_precision(run_2)) < 1e-9
+          assert selected_model(run_1) == selected_model(run_2)
+      Same guarantee, same anti-cheating value, and it does not hand the classifier an
+      output-equality assertion to find.
 
   (g) A NEGATIVE-CONTROL TRAP.
       Build in at least one way for the artifact to be structurally valid but semantically
@@ -779,6 +840,23 @@ What an accepted task looks like end to end:
   fixtures AND held-out requests, validates against the VERIFIER'S OWN copy of the schema,
   checks decisions/ordering/consistency, re-runs the pipeline and asserts byte-identical
   output.
+
+  *** READ THE AXIS WARNING IN 7.3 BEFORE COPYING THIS VERIFIER. ***
+
+  This worked example is a DATA-PROCESSING task, and the verifier above is shaped accordingly:
+  it grades "the agent's output matches the reference output". That is the correct axis HERE and
+  it is a BLOCKED axis nearly everywhere else. Copying this verifier into a machine-learning or
+  security or scientific-computing task is the single most expensive mistake in this document —
+  it has cost four full rebuilds, because the resulting task classifies as data-processing no
+  matter how faithfully the rest of the domain is executed.
+
+  Keep from it: the reference engine, the held-out generator, the verifier-owned schema, the
+  re-execution. All of those are about DERIVING an expectation the agent cannot copy, and they
+  are right for every category.
+
+  Do NOT keep from it: `assert agent_output == oracle.decide(...)` and `assert byte-identical`.
+  Those choose the axis. Choose yours from your own category (section 3), then use the techniques
+  above to make it uncheatable.
 
 
 ================================================================================

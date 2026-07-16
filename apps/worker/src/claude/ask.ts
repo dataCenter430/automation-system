@@ -185,6 +185,11 @@ export interface AskArgs {
   /** Cancels the wait when the turn is aborted or times out. */
   signal?: AbortSignal;
   onProgress?: (msg: string) => Promise<void>;
+  /**
+   * Fired once, when the question goes live, so a channel like Slack can ping a human. Injected
+   * (not a direct slack import) to keep this module free of config/transport. Must never throw.
+   */
+  onAsked?: (q: { slug: string; question: string }) => void;
 }
 
 /**
@@ -251,6 +256,8 @@ async function askInner(args: AskArgs): Promise<Answer> {
 
   blocked += 1;
   await args.onProgress?.(`❓ waiting on you: ${args.question.slice(0, 100)}`);
+  // Ping the human out-of-band (Slack). Guarded so a bad callback cannot break the wait loop.
+  try { args.onAsked?.({ slug, question: args.question }); } catch { /* notification is best-effort */ }
 
   try {
     const deadline = now + timeoutMs;

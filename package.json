@@ -16,7 +16,8 @@
     "verify:task": "node --experimental-strip-types apps/worker/src/cli/verify-task.ts",
     "summary:build": "node --experimental-strip-types scripts/build-summary.ts",
     "selectors:record": "node --experimental-strip-types apps/worker/src/browser/record.ts",
-    "feedback:fix": "node --experimental-strip-types scripts/feedback-fix.ts"
+    "feedback:fix": "node --experimental-strip-types scripts/feedback-fix.ts",
+    "worker:supervised": "bash scripts/worker.sh"
   },
   "devDependencies": {
     "@types/archiver": "^6.0.4",

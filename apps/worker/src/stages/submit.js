@@ -1,60 +1,129 @@
 import { resolve_, exists, pageUrl, assertConfirmed } from "../browser/selectors.ts";
-import { setCheckbox, snap } from "../browser/actions.ts";
+import { fillReliably, setCheckbox, setRadio, snap } from "../browser/actions.ts";
 import { withScratchPage } from "../browser/cdp.ts";
-/** Pull both ids out of a revise card's href. */
-function idsFromHref(href) {
-    const sub = /\/submission-([0-9a-f-]{36})\//i.exec(href);
-    const asg = /[?&]assignmentId=([0-9a-f-]{36})/i.exec(href);
-    return { submissionId: sub?.[1] ?? null, assignmentId: asg?.[1] ?? null };
+import { loadConfig } from "../config.ts";
+/**
+ * Three uuids, and for a long time this file confused two of them.
+ *
+ *   task_id        the TASK GALLERY uuid. The operator claims a task inspiration and pastes its
+ *                  uuid when adding the task. It exists BEFORE any submission does. It is also
+ *                  what goes in the form's "Task Inspiration ID" field.
+ *
+ *   submission uid the uuid SNORKEL assigns to a submission. Shown next to "UID:" in the page
+ *                  header, and it is the prefix of the revise card's data-testid. This is the
+ *                  ONLY id that can find our task in the revise queue.
+ *
+ *   project stage  the `/submission-{uuid}/` segment of the href. This is NOT per-task — every
+ *                  Terminus revise card in the live DOM carries the SAME one
+ *                  (941bede0-d9c6-42f0-874d-cd3d25582c72). It identifies the project's
+ *                  submission STAGE, not a submission.
+ *
+ * The old code pulled the project-stage uuid out of the href, called it `submissionId`, and
+ * wrote it into the task's `submission_id` column — clobbering the real per-task uid that
+ * upload.ts had correctly captured from the header. And findSubmitted() looked the revise card
+ * up by `task_id`, which is a gallery uuid and therefore never matched anything.
+ *
+ * That second bug silently disarmed the guard this entire file exists to provide: the "have we
+ * already submitted?" check answered NO every single time, so a retry in SUBMITTING would click
+ * Submit a second time. Double submission is not undoable.
+ */
+function assignmentFromHref(href) {
+    return /[?&]assignmentId=([0-9a-f-]{36})/i.exec(href)?.[1] ?? null;
+}
+/**
+ * "How long did it take you to complete this submission?" — in minutes.
+ *
+ * A required field with no right answer available to us: the machine's wall-clock is not the
+ * number Snorkel is asking for (it is asking what it cost a person). The operator supplies the
+ * spread — 180/200/220 — and we pick from it. A real human revision in the live DOM used 200.
+ *
+ * It is a spread rather than a constant on purpose: the same number on every submission, forever,
+ * is itself a signal.
+ */
+export function pickAht() {
+    const choices = loadConfig().snorkel?.ahtChoices ?? [180, 200, 220];
+    return choices[Math.floor(Math.random() * choices.length)];
+}
+/** We cannot reconcile without Snorkel's uid, and we must never guess in the unsafe direction. */
+export class CannotReconcile extends Error {
+    constructor() {
+        super(`Refusing to submit: this task has no Snorkel submission UID recorded, so there is no way ` +
+            `to check whether it has ALREADY been submitted.\n\n` +
+            `The uid is captured from the submission page header during upload (submission.uid). If ` +
+            `it is missing, upload either never ran or could not read it.\n\n` +
+            `Answering "not yet submitted" here would be a guess in the one direction that cannot be ` +
+            `undone — so the task parks for a human instead.`);
+        this.name = "CannotReconcile";
+    }
 }
 /**
  * Did this task already get submitted?
  *
- * After a submit, Snorkel bounces to /home and the task appears in "Tasks to be revised"
- * as a card whose data-testid is literally `<task_id>-Terminus-2nd-Edition`. That makes
- * reconciliation exact rather than fuzzy.
+ * After a submit, Snorkel bounces to /home and the task appears in "Tasks to be revised" as a
+ * card whose data-testid is `<SNORKEL SUBMISSION UID>-Terminus-2nd-Edition`. Keyed on the right
+ * uuid, that makes reconciliation exact rather than fuzzy.
+ *
+ * Throws CannotReconcile when we have no uid — because "I could not check" and "it is not there"
+ * are different answers, and only one of them is safe to act on.
  */
-export async function findSubmitted(a, taskId, runDir) {
+export async function findSubmitted(a, submissionUid, runDir) {
+    if (!submissionUid)
+        throw new CannotReconcile();
     // In its OWN tab. This used to call snorkelPage(home), which REUSES the live Snorkel tab
     // and navigates it — so reconciling "have we already submitted?" silently destroyed the
     // filled submission form we were about to submit, and the Submit button was then looked
     // for on /home. Reconciliation must be able to look at the home page without touching the
     // page the caller is working on.
     return withScratchPage(a, pageUrl("home"), async (page) => {
-        if (!(await exists(page, "home.reviseCard", { tokens: { task_id: taskId }, timeoutMs: 6000 }))) {
-            return { submitted: false, assignmentId: null, submissionId: null, note: "not in the revise list" };
+        const tokens = { submission_uid: submissionUid };
+        if (!(await exists(page, "home.reviseCard", { tokens, timeoutMs: 6000 }))) {
+            return { submitted: false, assignmentId: null, note: "not in the revise list" };
         }
-        const card = await resolve_(page, "home.reviseCard", { tokens: { task_id: taskId } });
-        const href = (await card.getAttribute("href")) ?? "";
-        const { submissionId, assignmentId } = idsFromHref(href);
+        const card = await resolve_(page, "home.reviseCard", { tokens });
+        const assignmentId = assignmentFromHref((await card.getAttribute("href")) ?? "");
         await snap(page, runDir, "reconciled-found");
         return {
-            submitted: true, assignmentId, submissionId,
+            submitted: true,
+            assignmentId,
             note: `found in the revise list${assignmentId ? ` (assignment ${assignmentId.slice(0, 8)})` : ""}`,
         };
     });
 }
-/** Tick "generate rubric automatically". Only ever called after feedback is green. */
-export async function enableRubricGeneration(page, runDir) {
-    // Ticking the wrong box can overwrite a rubric, and this selector is still a guess.
-    assertConfirmed("submission.generateRubricCheckbox");
-    await setCheckbox(page, "submission.generateRubricCheckbox", true);
-    await snap(page, runDir, "rubric-checkbox-ticked");
+export async function finaliseForm(page, runDir, opts) {
+    const forReviewer = opts.pass === "reviewer";
+    // Order matters here only in that both must be right before Submit; but the pairing is the
+    // whole point, so they are set together and never independently.
+    await setCheckbox(page, "submission.generateRubricCheckbox", !forReviewer);
+    await setCheckbox(page, "submission.sendToReviewerCheckbox", forReviewer);
+    // An attestation. Computed from the task's own Dockerfile against Snorkel's canonical list.
+    await setRadio(page, "submission.canonicalBaseImageRadio", opts.canonicalBaseImage);
+    // "Did you use a Task Inspiration from the Task Gallery?" — Yes: the uuid the operator pastes
+    // to create a task IS the gallery inspiration uuid (which is also why task_id is NOT Snorkel's
+    // submission uid). Answering Yes MOUNTS a required "Task Inspiration ID" field, so the radio
+    // must be set before the fill below — the field does not exist until it is.
+    await setRadio(page, "submission.taskGalleryRadio", true);
+    await fillReliably(page, "submission.taskInspirationId", opts.taskId);
+    await fillReliably(page, "submission.aht", String(opts.ahtMinutes));
+    await snap(page, runDir, `form-finalised-${opts.pass}`);
 }
 /**
  * The click. Called only after the human has approved in the dashboard.
  *
  * `page` MUST be the submission page. It used to be handed /home.
  */
-export async function clickSubmit(a, page, taskId, runDir) {
-    // The one irreversible action in the system. Refuse outright while the selector is still
-    // an unverified guess whose fallback candidate is a bare `button[type=submit]` — that can
-    // match a different form's button, click it, and report success.
+export async function clickSubmit(a, page, submissionUid, runDir) {
+    // Both of these were "$unconfirmed" placeholders that the system refused to click, because
+    // their fallback candidates (a bare `button[type=submit]`, a `[data-testid*=rubric]`) were
+    // generic enough to hit the WRONG element and report success. The real DOM has now pinned
+    // both, so assertConfirmed passes — but it stays, because the day someone adds a new guessed
+    // selector is the day it earns its keep again.
     assertConfirmed("submission.submitButton");
-    // Last chance to notice we already did this. Runs in its own tab, so `page` still shows
-    // the filled submission form when we come back.
-    const before = await findSubmitted(a, taskId, runDir).catch(() => null);
-    if (before?.submitted) {
+    // Last chance to notice we already did this. Runs in its own tab, so `page` still shows the
+    // filled submission form when we come back. NOT swallowed with .catch(() => null) any more:
+    // CannotReconcile means we do not know, and "we do not know" must stop the submit, not sail
+    // past it into the one action that cannot be taken back.
+    const before = await findSubmitted(a, submissionUid, runDir);
+    if (before.submitted) {
         return { ...before, note: `already submitted — did not click again (${before.note})` };
     }
     const btn = await resolve_(page, "submission.submitButton");
@@ -63,10 +132,11 @@ export async function clickSubmit(a, page, taskId, runDir) {
     // Snorkel returns you to /home after a submit.
     await page.waitForLoadState("networkidle", { timeout: 60_000 }).catch(() => { });
     await snap(page, runDir, "post-submit");
-    const after = await findSubmitted(a, taskId, runDir);
+    const after = await findSubmitted(a, submissionUid, runDir);
     if (!after.submitted) {
         return {
-            submitted: true, assignmentId: null, submissionId: null,
+            submitted: true,
+            assignmentId: null,
             note: "clicked Submit, but the task has not appeared in the revise list yet (it may take a moment)",
         };
     }

@@ -32,11 +32,12 @@ test("SUBMITTED IS NOT TERMINAL — this is what un-deadlocks the pipeline", () 
   assert.ok(!TERMINAL.includes(S.SUBMITTED));
 });
 
-test("SENT_TO_REVIEWER is the real end of our involvement", () => {
+test("SENT_TO_REVIEWER and ACCEPTED are both terminal ends of the pipeline", () => {
   assert.equal(isTerminal(S.SENT_TO_REVIEWER), true);
+  assert.equal(isTerminal(S.ACCEPTED), true);
   assert.deepEqual(
     [...TERMINAL].sort((a, b) => a - b),
-    [S.NEEDS_HUMAN, S.FAILED, S.SENT_TO_REVIEWER].sort((a, b) => a - b),
+    [S.NEEDS_HUMAN, S.FAILED, S.SENT_TO_REVIEWER, S.ACCEPTED].sort((a, b) => a - b),
   );
 });
 

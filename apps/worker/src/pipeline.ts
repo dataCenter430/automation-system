@@ -580,6 +580,16 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
         });
       }
 
+      // ON THE REVISE LAP (pass 2), DO NOT RE-CLASSIFY THE CATEGORY.
+      //
+      // The changelog is explicit: "Tasks already in your revision queue or awaiting review are
+      // exempt [from a newly-blocked category] and continue through to Accepted as normal." A pass-1
+      // task has already cleared the classifier and been accepted into the queue; re-running a
+      // NONDETERMINISTIC LLM classifier on the revise pass can flip it to "blocked" and — via the
+      // isCategoryBlock rebuild path below — throw away accepted work and rebuild it into a brand-new
+      // task that then edits a submission Snorkel already has. A revision is fixed IN PLACE. So the
+      // category classifier (and its rebuild trigger) is a pass-1-only gate.
+      const isRevise = st().pass === 2;
       const r = await gate.run(() =>
         verifyTask({
           taskDir: ws,
@@ -591,6 +601,7 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
           solveTimeoutSec: cfg.docker.solveTimeoutSec,
           testTimeoutSec: cfg.docker.testTimeoutSec,
           classifierModel: cfg.claude.classifierModel,
+          classify: !isRevise,
         }),
       );
 
@@ -729,7 +740,11 @@ export async function advance(ctx: Ctx, row: TerminusRow): Promise<boolean> {
       //   • and has onSessionId wired, so the new session id is persisted rather than dropped.
       //     (fixTask returns void and never reads back a new session id — handing it a null
       //     session would have silently orphaned the conversation every later stage depends on.)
-      if (isCategoryBlock(s.lastError)) {
+      // The rebuild-on-category-block path is PASS 1 ONLY. On the revise lap the classifier does not
+      // run (see the verify call above), so this branch cannot be reached with pass===2 — but the
+      // guard is explicit belt-and-braces: a task already in Snorkel's revise queue must NEVER be
+      // rebuilt from scratch (that would replace a submission Snorkel already accepted).
+      if (isCategoryBlock(s.lastError) && s.pass !== 2) {
         rmSync(join(ws, ".pipeline", "BUILD_DONE"), { force: true });
         rmSync(join(ws, ".pipeline", "design.json"), { force: true });
         patchState(ws, { claudeSessionId: null, explanations: null });

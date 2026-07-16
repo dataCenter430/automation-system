@@ -77,11 +77,16 @@ test("REVIEW_PENDING records that a human reviewer now has it", () => {
   assert.equal(actions[0]?.taskStatus, "HUMAN_REVIEW");
 });
 
-test("ACCEPTED is recorded once, and not re-announced", () => {
-  const first = planReconcile([row("sub-1", "ACCEPTED")], [task({ pipelineState: S.SENT_TO_REVIEWER, taskStatus: null })]);
-  assert.equal(first[0]?.taskStatus, "ACCEPTED");
-  const again = planReconcile([row("sub-1", "ACCEPTED")], [task({ pipelineState: S.SENT_TO_REVIEWER, taskStatus: "ACCEPTED" })]);
-  assert.deepEqual(again, [], "an already-recorded ACCEPTED must not fire again");
+test("ACCEPTED moves the task to the terminal ACCEPTED state — where its recipe is recorded", () => {
+  const actions = planReconcile([row("sub-1", "ACCEPTED")], [task({ pipelineState: S.SENT_TO_REVIEWER })]);
+  assert.equal(actions[0]?.to, S.ACCEPTED);
+  assert.equal(actions[0]?.taskStatus, "ACCEPTED");
+});
+
+test("an already-ACCEPTED task is never re-processed", () => {
+  // ACCEPTED (110) is terminal and not in WAITING_ON_SNORKEL, so it is not even fetched — and even
+  // if it were, the planner does not re-fire it. The recipe is recorded exactly once.
+  assert.deepEqual(planReconcile([row("sub-1", "ACCEPTED")], [task({ pipelineState: S.ACCEPTED })]), []);
 });
 
 test("REJECTED / SKIPPED go to NEEDS_HUMAN — never a silent auto-retry", () => {

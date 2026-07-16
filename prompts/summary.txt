@@ -276,8 +276,15 @@ HARD LIMITS:
 
   [agent] timeout_sec         must be between 1 and 1800 seconds. 1800 is the ceiling.
   [verifier] timeout_sec      keep realistic; 450-600 is the normal range.
-  [environment] allow_internet  MUST be false. This is a blocking static check. There is NO
-                              NETWORK at agent time or at test time.
+  [environment] allow_internet  MUST BE SET, and the value must MATCH the task. Default to false
+                              and BUILD OFFLINE TASKS: use false when the task is fully solvable
+                              without the network — then there is no network at agent or test time,
+                              and every verifier dep must be baked into the image. Use true ONLY when
+                              the task genuinely requires the network (retrieving current/external
+                              info, interacting with web resources, or downloading a model too big
+                              to bundle). Snorkel runs an eval that REJECTS true without a real need,
+                              so do not set true for convenience. Prefer false unless the task cannot
+                              work offline. (Superseded the old "must be false" rule, Jul 13 2026.)
   [environment] build_timeout_sec  bounded; 600-1200 depending on compile weight.
   environment/ total size     <= 100 MiB
   any single file in environment/  <= 50 MiB

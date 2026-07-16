@@ -31,6 +31,7 @@ import { readState, patchState } from "./state.ts";
 import { realRunner, submissionsList } from "./stb/cli.ts";
 import { ensureReady, realLoginRunner } from "./stb/login.ts";
 import { reconcile, WAITING_ON_SNORKEL } from "./stb/reconcile.ts";
+import { recordAccepted, factsOf } from "./stages/accepted.ts";
 import type { TerminusRow } from "../../../packages/shared/src/types.ts";
 
 const cfg = loadConfig();
@@ -181,6 +182,34 @@ async function reconcileSnorkel(): Promise<void> {
       },
       list: () => submissionsList(stbCtx, { showFolders: true }),
       apply: async (a) => {
+        const ws = resolve(cfg.paths.workspace, a.slug);
+
+        // ACCEPTED IS SPECIAL: the recipe MUST be written before we commit the terminal state.
+        //
+        // ACCEPTED (110) is terminal and on no sweep list, so once a task is there nothing ever
+        // revisits it. If we marked it accepted first and the recipe write then failed transiently,
+        // the recipe would be lost forever. So: record FIRST. Only on success advance to 110. If the
+        // record throws (a real DB failure), leave the task at SENT_TO_REVIEWER (100, still in
+        // WAITING_ON_SNORKEL) so the next hourly reconcile retries — but mark task_status accepted so
+        // the acceptance itself is not lost. recordAccepted does NOT throw on a missing workspace; it
+        // only throws on a genuine write failure, which is exactly the case we want to retry.
+        if (a.to === S.ACCEPTED) {
+          try {
+            const row = await getTask(a.taskId);
+            if (row) await recordAccepted(a.taskId, ws, factsOf(row));
+            await patchTask(a.taskId, {
+              pipeline_state: S.ACCEPTED, submission_id: a.submissionId, task_status: TASK_STATUS_NUM.ACCEPTED,
+            });
+            if (readState(ws)) patchState(ws, { pipelineState: S.ACCEPTED });
+            ctx.log(`✓ recorded accepted recipe for ${a.slug}`);
+          } catch (e) {
+            // Record the acceptance, but stay at 100 so the recipe is retried next reconcile.
+            await patchTask(a.taskId, { task_status: TASK_STATUS_NUM.ACCEPTED, submission_id: a.submissionId }).catch(() => {});
+            ctx.log(`⚠ could not record recipe for ${a.slug} (staying accepted-but-unrecorded; retry next reconcile): ${(e as Error).message}`);
+          }
+          return;
+        }
+
         const patch: Partial<TerminusRow> = { pipeline_state: a.to, submission_id: a.submissionId };
         if (a.to === S.NEEDS_HUMAN) patch.last_error = a.reason;
         const ts = a.taskStatus ? TASK_STATUS_NUM[a.taskStatus] : undefined;
@@ -188,10 +217,10 @@ async function reconcileSnorkel(): Promise<void> {
         await patchTask(a.taskId, patch);
 
         // Keep the local state.json in step so advance() and the dashboard agree on the new state.
-        const ws = resolve(cfg.paths.workspace, a.slug);
         if (readState(ws)) {
           patchState(ws, { pipelineState: a.to, lastError: a.to === S.NEEDS_HUMAN ? a.reason : null });
         }
+
         void step(a.taskId); // drive it now rather than waiting for the next poll
       },
       log: ctx.log,

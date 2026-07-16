@@ -234,11 +234,15 @@ export function lintTask(taskDir: string): LintResult {
   // DECLARED metadata against what is actually on disk. A declaration nobody checks against
   // reality is how `codebase_size = "small"` shipped on top of a 6-file environment.
   let meta: Record<string, any> = {};
+  // Hoisted so the test.sh check further down knows whether the task runs with the network. A `true`
+  // task may legitimately curl/wget at test time; a `false` task may not.
+  let allowInternet = false;
   if (existsSync(tomlPath)) {
     try {
       const t = parseToml(readFileSync(tomlPath, "utf8")) as any;
       const md = t.metadata ?? {};
       meta = md;
+      allowInternet = t.environment?.allow_internet === true;
 
       if (t.version !== "2.0") {
         add("validate_task_fields", "blocking", "task.toml", `version must be "2.0", got ${JSON.stringify(t.version)}`);
@@ -285,9 +289,20 @@ export function lintTask(taskDir: string): LintResult {
         add("validate_task_fields", "blocking", "task.toml",
             `[agent] timeout_sec must be between 1 and 1800, got ${agentTimeout}`);
       }
-      if (t.environment?.allow_internet !== false) {
+      // allow_internet: BOTH values are valid (Snorkel changelog, Jul 13 2026). `false` (default) for
+      // tasks fully solvable offline; `true` only when the task genuinely needs the network (external
+      // info, web resources, a model too big to bundle). Snorkel runs an eval that rejects `true`
+      // WITHOUT a genuine need — we cannot judge that mechanically, so we accept `true` and only nudge.
+      // It must still be PRESENT (Snorkel requires the field set). What we DO enforce, only when it is
+      // false, is that the verifier bakes its deps (checked below): a false task must run offline.
+      if (t.environment?.allow_internet === undefined) {
         add("allow_internet", "blocking", "task.toml",
-            "[environment] allow_internet must be false. All verifier deps must be baked into the image.");
+            "[environment] allow_internet must be set (true or false). Use false for offline-solvable tasks; " +
+            "true only when the task genuinely requires the network.");
+      } else if (t.environment.allow_internet === true) {
+        add("allow_internet", "warning", "task.toml",
+            "allow_internet = true — make sure the task GENUINELY needs the network (Snorkel rejects true " +
+            "without a real need). If it is solvable offline, set false and bake deps into the image.");
       }
       if (typeof t.verifier?.timeout_sec !== "number") {
         add("validate_task_fields", "blocking", "task.toml", "[verifier] timeout_sec is required");
@@ -364,12 +379,13 @@ export function lintTask(taskDir: string): LintResult {
     for (const line of df.split("\n")) {
       const m = /^\s*FROM\s+(\S+)/i.exec(line);
       if (m && !m[1]!.includes("@sha256:")) {
-        // WARNING, not blocking. Snorkel's own Default_Task_Skeleton.zip ships an unpinned
-        // `FROM python:3.13-slim-bookworm`, so their CI evidently tolerates it. Being
-        // stricter than the platform would just burn Claude fix cycles on a non-issue —
-        // and their Check-feedback stage is the authority anyway.
-        add("check_pinned_images", "warning", "environment/Dockerfile",
-            `Base image is not digest-pinned ("${m[1]}"). Pinning is best practice; Snorkel's own skeleton is unpinned, so this is not treated as blocking.`);
+        // BLOCKING. Snorkel's May 27 2026 CI update makes tag-only FROM images a HARD block:
+        // "Every FROM image must include @sha256:<digest>." An unpinned image passing our lint would
+        // sail into Snorkel CI and be rejected there, costing a full submission cycle — so catch it
+        // here. (The old rationale that the skeleton ships unpinned is superseded by that update.)
+        add("check_pinned_images", "blocking", "environment/Dockerfile",
+            `Base image "${m[1]}" is not digest-pinned. Every FROM must include @sha256:<digest> ` +
+            `(Snorkel CI blocks tag-only images). Pin it, e.g. FROM ${m[1]}@sha256:<digest>.`);
       }
     }
     // Tests and solution are MOUNTED at runtime, never baked in. Baking them in leaks
@@ -388,6 +404,17 @@ export function lintTask(taskDir: string): LintResult {
     if (!/ctrf/i.test(df)) {
       add("verifier_deps_baked", "warning", "environment/Dockerfile",
           "pytest-json-ctrf does not appear to be installed, but tests/test.sh passes --ctrf.");
+    }
+    // tmux + asciinema are the Harbor agent runtime. Missing EITHER fails EVERY agent run with
+    // "Failed to start tmux session / verifier_did_not_run" and no verifier output — so the local
+    // oracle can pass while every real GPT-5.5/Opus agent run (and the difficulty check) fails. The
+    // Jun 3 Common Errors "Environment Problems" section names this explicitly. Blocking.
+    for (const tool of ["tmux", "asciinema"]) {
+      if (!new RegExp(tool, "i").test(df)) {
+        add("environment_problems", "blocking", "environment/Dockerfile",
+            `${tool} is not installed in the image. Harbor runs the agent inside a tmux/asciinema ` +
+            `session, so a missing ${tool} fails every agent run with no verifier output. Install it.`);
+      }
     }
 
     // A `RUN pip install \` + continuation lines is ONE command. Reading the file line by
@@ -506,17 +533,39 @@ export function lintTask(taskDir: string): LintResult {
       add("check_test_sh", "blocking", "tests/test.sh",
           "test.sh must write a reward on BOTH the pass and the fail path.");
     }
-    if (!/RC=\$\?\nif \[ "\$RC" -eq 0 \]; then/.test(ts)) {
+    // check_test_sh accepts BOTH canonical shapes (Snorkel changelog, Jun 3 2026):
+    //   (a) a variable captured immediately after pytest:  RC=$?  \n  if [ "$RC" -eq 0 ]; then …
+    //       (any var name, case-insensitive — `rc=$?` is fine), and
+    //   (b) the inline form:  if [ $? -eq 0 ]; then …   directly after the pytest line.
+    // The variable form is PREFERRED (a line between pytest and the check clobbers $?), but the inline
+    // form is valid and must not be bounced into a fix loop. The old regex required a single literal
+    // spelling and rejected both `rc=$?` and the inline form — files Snorkel accepts.
+    const varForm = /(\w+)=\$\?\s*\n\s*if\s*\[\s*"?\$\1"?\s+-eq\s+0\s*\]/i.test(ts);
+    const inlineForm = /if\s*\[\s*\$\?\s+-eq\s+0\s*\]/.test(ts);
+    if (!varForm && !inlineForm) {
       add("canonical_reward_block", "blocking", "tests/test.sh",
-          'The reward block must be exactly:\n  RC=$?\n  if [ "$RC" -eq 0 ]; then\n    echo 1 > /logs/verifier/reward.txt\n  else\n    echo 0 > /logs/verifier/reward.txt\n  fi\nNo comment or blank line between RC=$? and the if. This exact shape was a documented rejection.');
+          'The reward block must test the pytest exit status and write reward.txt. Use either:\n' +
+          '  RC=$?\n  if [ "$RC" -eq 0 ]; then echo 1 > /logs/verifier/reward.txt; else echo 0 > /logs/verifier/reward.txt; fi\n' +
+          'or the inline `if [ $? -eq 0 ]; then …` immediately after pytest. Nothing may run between pytest and the check.');
     }
-    if (/^\s*exit\s+"?\$RC"?\s*$/m.test(ts)) {
+    if (/^\s*exit\s+"?\$?\w*"?\s*$/m.test(ts) && /reward\.txt/.test(ts)) {
       add("canonical_reward_block", "blocking", "tests/test.sh",
-          'Remove the trailing `exit "$RC"` — it is a documented rejection.');
+          "Remove the trailing `exit` after the reward block — Harbor reads reward.txt, not the exit code, and a trailing exit is a documented rejection.");
     }
-    if (/(pip\s+install|apt-get|apk\s+add|curl|wget)/.test(ts)) {
+    // Runtime installs / network at TEST time. When allow_internet = false the task runs offline, so a
+    // network fetch there cannot work and is blocking. When allow_internet = true the task legitimately
+    // has the network, so curl/wget is fine — but a runtime PACKAGE install is still a reproducibility
+    // warning (bake deps into the image), never a hard block.
+    const installer = /(pip\s+install|apt-get|apk\s+add|npm\s+(install|i)\b|yarn\s+add|cargo\s+install|gem\s+install|go\s+(get|install))/;
+    const netFetch = /(curl|wget)\b/;
+    if (!allowInternet && (installer.test(ts) || netFetch.test(ts))) {
       add("no_runtime_install", "blocking", "tests/test.sh",
-          "test.sh must not install anything or hit the network — there is no network at test time. Bake deps into environment/Dockerfile.");
+          "test.sh must not install anything or hit the network — allow_internet = false means there is no " +
+          "network at test time. Bake deps into environment/Dockerfile.");
+    } else if (allowInternet && installer.test(ts)) {
+      add("no_runtime_install", "warning", "tests/test.sh",
+          "test.sh installs a package at runtime. Even with allow_internet = true this hurts reproducibility — " +
+          "prefer baking deps into environment/Dockerfile.");
     }
     if (!/pytest/.test(ts)) {
       add("check_test_sh", "blocking", "tests/test.sh",

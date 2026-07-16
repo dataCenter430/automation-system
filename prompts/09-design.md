@@ -36,6 +36,14 @@ The nouns moved three times. The **grading axis** never moved once — so the ve
 
 {{rejectedDesigns}}
 
+{{#acceptedExamples}}
+## Tasks in this category that Snorkel ALREADY ACCEPTED — copy what worked
+
+These implementations cleared human review. They are proof of a deliverable and a grading axis that Snorkel accepts in this category. Study their shape — the axis, the kinds of tests, how difficulty was earned — and design yours along the same lines. Do NOT copy their domain or nouns (that risks a duplicate); copy the STRUCTURE that passed.
+
+{{acceptedExamples}}
+{{/acceptedExamples}}
+
 ## Anti-cheating does not force your hand
 
 Playbook §7.3 tells you how to **derive** an expected value without hardcoding it. It does **not** tell you to assert equality. Both of these re-derive; only one is in a category Snorkel accepts:

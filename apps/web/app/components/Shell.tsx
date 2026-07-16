@@ -149,6 +149,7 @@ export const STATE_META: Record<number, StateMeta> = {
   96: { name: "REVIEW APPROVAL",   color: "var(--brand)", live: false, hint: "revision is green. Approving SENDS IT TO A PERSON." },
   98: { name: "SENDING",           color: "var(--run)",  live: true,  hint: "sending to the reviewer — cannot be taken back" },
   100:{ name: "WITH REVIEWER",     color: "var(--ok)",   live: false, hint: "done — a human reviewer has it" },
+  110:{ name: "ACCEPTED",          color: "var(--ok)",   live: false, hint: "cleared human review — its recipe is saved for future builds" },
 
   [-1]: { name: "FAILED",          color: "var(--bad)",  live: false, hint: "it died. Read last_error, then Retry." },
   [-2]: { name: "NEEDS HUMAN",     color: "var(--bad)",  live: false, hint: "it stopped and refused to guess. Go and look." },

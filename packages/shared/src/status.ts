@@ -65,6 +65,12 @@ export const PipelineState = {
   SENDING_TO_REVIEWER: 98,
   /** Done. A human reviewer has it. task_status → HUMAN_REVIEW. */
   SENT_TO_REVIEWER: 100,
+  /**
+   * The task cleared human review. The hourly reconciler moves it here when Snorkel reports
+   * ACCEPTED, and the same step records its implementation recipe into terminus_implementation for
+   * future builds to learn from. Terminal — the happiest end there is.
+   */
+  ACCEPTED: 110,
 
   FAILED: -1,
   NEEDS_HUMAN: -2,
@@ -131,6 +137,7 @@ export const CRASHED_MIDFLIGHT: readonly number[] = [
  */
 export const TERMINAL: readonly number[] = [
   PipelineState.SENT_TO_REVIEWER,
+  PipelineState.ACCEPTED,
   PipelineState.FAILED,
   PipelineState.NEEDS_HUMAN,
 ];

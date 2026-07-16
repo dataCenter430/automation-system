@@ -33,6 +33,15 @@ export interface TerminusImplementationRow {
   solution_explanation: string | null;
   verification_explanation: string | null;
   created_at: string;
+  /** True once the task cleared human review — a proven recipe worth learning from. */
+  accepted: boolean;
+  accepted_at: string | null;
+  /** Denormalised from terminus, so retrieval of similar accepted tasks is a single-table filter. */
+  category: string | null;
+  sub_category: string | null;
+  languages: string | null;
+  title: string | null;
+  slug: string | null;
 }
 
 export type EventStage =

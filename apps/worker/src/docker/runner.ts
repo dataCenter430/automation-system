@@ -85,21 +85,25 @@ export async function buildImage(
 /**
  * Start the task container.
  *
- * Two deliberate choices:
- *  - `--network none` reproduces task.toml's allow_internet=false. If a task only passes
+ * Network mode MIRRORS the task's own allow_internet setting:
+ *  - allow_internet = false (default) → `--network none`. If a supposedly-offline task only passes
  *    with a network, it is broken, and we want to find that out here rather than in review.
- *  - NO `-w` flag. The image's own WORKDIR must survive; some tests assert on $PWD.
+ *  - allow_internet = true → `--network bridge`. Snorkel welcomes true when the task genuinely needs
+ *    the network (external info, web resources, an un-bundleable model), and its own eval runs the
+ *    task WITH the network; forcing `none` here would fail a legitimately-online task's oracle.
+ *
+ * NO `-w` flag. The image's own WORKDIR must survive; some tests assert on $PWD.
  */
 export async function runDetached(
   name: string,
   image: string,
-  limits: { cpus: number; memoryMb: number },
+  limits: { cpus: number; memoryMb: number; allowInternet?: boolean },
 ): Promise<void> {
   await run(["rm", "-f", name], { timeoutSec: 60 }); // idempotent: a crashed run may have left one
   const r = await run([
     "run", "-d",
     "--name", name,
-    "--network", "none",
+    "--network", limits.allowInternet ? "bridge" : "none",
     "--cpus", String(limits.cpus),
     "--memory", `${limits.memoryMb}m`,
     image,

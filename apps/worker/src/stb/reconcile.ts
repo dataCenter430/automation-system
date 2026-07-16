@@ -101,9 +101,11 @@ export function planReconcile(rows: SubmissionRow[], tasks: ReconcileTask[]): Re
 
       case "ACCEPTED":
       case "OFFERED":
-        // A win. No further pipeline work; just record the outcome once.
-        if (task.taskStatus !== row.status) {
-          actions.push({ ...base, to: task.pipelineState, taskStatus: row.status, reason: `Snorkel ${row.status} — accepted` });
+        // A win — and a PROVEN RECIPE. Move it to the terminal ACCEPTED state; the apply layer
+        // records its implementation summary into terminus_implementation for future builds to
+        // learn from. Only fire once (when it is not already there).
+        if (task.pipelineState !== S.ACCEPTED) {
+          actions.push({ ...base, to: S.ACCEPTED, taskStatus: row.status, reason: `Snorkel ${row.status} — recording the recipe` });
         }
         break;
 

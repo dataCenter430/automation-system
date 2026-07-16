@@ -1,7 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { TerminusRow, EventStage, EventStatus } from "./types.ts";
+import type { TerminusRow, EventStage, EventStatus, TerminusImplementationRow } from "./types.ts";
 import { PipelineState } from "./status.ts";
 import { REPO_ROOT } from "./paths.ts";
 
@@ -111,12 +111,67 @@ export async function upsertImplementation(
     difficulty_explanation?: string;
     solution_explanation?: string;
     verification_explanation?: string;
+    accepted?: boolean;
+    accepted_at?: string;
+    category?: string;
+    sub_category?: string;
+    languages?: string;
+    title?: string;
+    slug?: string;
   },
 ): Promise<void> {
   const { error } = await db()
     .from("terminus_implementation")
     .upsert({ task_id: taskId, ...patch }, { onConflict: "task_id" });
   if (error) throw new Error(`upsertImplementation: ${error.message}`);
+}
+
+/**
+ * The three explanations already persisted for a task, so an accept whose WORKSPACE is gone can
+ * still assemble a recipe from the durable DB columns (the explain stage wrote them at build time).
+ * Returns null when there is no row, or the row has no explanations.
+ */
+export async function getStoredExplanations(
+  taskId: string,
+): Promise<{ difficulty: string; solution: string; verification: string } | null> {
+  const { data, error } = await db()
+    .from("terminus_implementation")
+    .select("difficulty_explanation, solution_explanation, verification_explanation")
+    .eq("task_id", taskId)
+    .maybeSingle();
+  if (error) throw new Error(`getStoredExplanations: ${error.message}`);
+  if (!data) return null;
+  const d = data.difficulty_explanation, s = data.solution_explanation, v = data.verification_explanation;
+  if (!d && !s && !v) return null;
+  return { difficulty: d ?? "", solution: s ?? "", verification: v ?? "" };
+}
+
+/**
+ * Accepted implementations of SIMILAR tasks — the reference library a new build learns from.
+ *
+ * "Similar" is, for v1, the same category, most-recently-accepted first. Category is the strongest
+ * cheap signal (it is what the classifier gates on, so a same-category accepted task shares the
+ * deliverable/grading shape a new one needs). Only rows with a real summary are returned, and the
+ * task being built is excluded so it never cites itself on a re-run.
+ */
+export async function findAcceptedImplementations(opts: {
+  category: string;
+  excludeTaskId?: string;
+  limit?: number;
+}): Promise<TerminusImplementationRow[]> {
+  let q = db()
+    .from("terminus_implementation")
+    .select("*")
+    .eq("accepted", true)
+    .eq("category", opts.category)
+    .not("implementation_summary", "is", null)
+    .order("accepted_at", { ascending: false })
+    .limit(opts.limit ?? 3);
+  if (opts.excludeTaskId) q = q.neq("task_id", opts.excludeTaskId);
+
+  const { data, error } = await q;
+  if (error) throw new Error(`findAcceptedImplementations: ${error.message}`);
+  return (data ?? []) as TerminusImplementationRow[];
 }
 
 /**

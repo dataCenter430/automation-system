@@ -67,3 +67,23 @@ create trigger terminus_touch_updated_at
 -- submission_id is only known AFTER Snorkel accepts the submission, so a row cannot
 -- possibly carry it at insert time. The original NOT NULL made queueing a task impossible.
 alter table terminus alter column submission_id drop not null;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- ACCEPTED-TASK IMPLEMENTATION LIBRARY.
+--
+-- A task that clears human review is a PROVEN recipe. We mark its implementation row accepted
+-- and denormalise the few fields retrieval needs (category / languages / title / slug), so a
+-- future build of a SIMILAR task can be handed the summaries of accepted ones and copy what
+-- worked. `implementation_summary` was always in the table but never written; it is now the
+-- assembled recipe. Denormalising the keys keeps retrieval a single-table filter, no join.
+alter table terminus_implementation
+  add column if not exists accepted     boolean     not null default false,
+  add column if not exists accepted_at  timestamptz,
+  add column if not exists category     text,
+  add column if not exists sub_category text,
+  add column if not exists languages    text,
+  add column if not exists title        text,
+  add column if not exists slug         text;
+
+create index if not exists terminus_implementation_accepted_idx
+  on terminus_implementation (accepted, category);

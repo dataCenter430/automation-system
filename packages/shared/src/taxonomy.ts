@@ -145,6 +145,20 @@ export function blockedCategories(): string[] {
  * task.toml fails Snorkel's CI, and finding out at the Check-feedback stage costs
  * a full build cycle. Better to stop at parse time, where a human is already looking.
  */
+/**
+ * The canonical category slug for a raw display label — the SAME normalisation toTaskToml uses,
+ * but without the blocked-category throw.
+ *
+ * This is the key both sides of the accepted-recipe library must agree on. Snorkel shows variable
+ * display labels ("Machine Learning & AI" vs "ML & AI"), and taxonomy.json exists precisely because
+ * the same category arrives under different spellings. Storing/retrieving on the raw label means two
+ * genuinely-same-category tasks never match; folding both to this canonical form fixes that.
+ */
+export function canonicalCategory(raw: string): string {
+  const t = load();
+  return lookup(t.category, raw) ?? slugifyCategory(raw);
+}
+
 export function toTaskToml(parsed: {
   category: string;
   sub_category: string;

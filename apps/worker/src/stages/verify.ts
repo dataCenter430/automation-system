@@ -78,6 +78,17 @@ async function readReward(container: string, runDir: string, label: string): Pro
   return Number(raw);
 }
 
+/** Does this task declare allow_internet = true? Then its container runs WITH the network. */
+function taskAllowsInternet(taskDir: string): boolean {
+  try {
+    const t = readFileSync(join(taskDir, "task.toml"), "utf8");
+    // [environment] allow_internet = true  (tolerant of spacing; false/absent → offline)
+    return /allow_internet\s*=\s*true\b/.test(t);
+  } catch {
+    return false;
+  }
+}
+
 /** Bring a container up with /tests, /solution and /logs staged inside it. */
 async function stage(
   name: string,
@@ -86,7 +97,11 @@ async function stage(
   opts: VerifyOptions,
   withSolution: boolean,
 ): Promise<void> {
-  await docker.runDetached(name, image, { cpus: opts.cpus, memoryMb: opts.memoryMb });
+  await docker.runDetached(name, image, {
+    cpus: opts.cpus,
+    memoryMb: opts.memoryMb,
+    allowInternet: taskAllowsInternet(taskDir),
+  });
 
   // Harbor reserves these mounts. We recreate them by hand so the task sees what it expects.
   await docker.exec(name, ["mkdir", "-p", "/tests", "/solution", "/logs/verifier", "/logs/artifacts"], 60);

@@ -23,6 +23,32 @@ import {
 } from "./design-gate.ts";
 import { categorySpec } from "./categories.ts";
 import type { RejectedDesign } from "../state.ts";
+import { findAcceptedImplementations } from "../../../../packages/shared/src/supabase.ts";
+import type { TerminusImplementationRow } from "../../../../packages/shared/src/types.ts";
+
+/**
+ * The accepted-task library, rendered for the design prompt. render() has no loops, so this
+ * pre-joins the rows into one markdown string. Empty when there are no accepted tasks in this
+ * category yet — the conditional block in 09-design.md then collapses to nothing.
+ */
+export function renderAcceptedExamples(rows: TerminusImplementationRow[]): string {
+  if (!rows.length) return "";
+  return rows
+    .map((r) => neutralizeBraces((r.implementation_summary ?? "").trim()))
+    .filter(Boolean)
+    .join("\n\n---\n\n");
+}
+
+/**
+ * A stored recipe can legitimately contain `{{...}}` — a templating task's deliverable, say. render()
+ * (claude/prompts.ts) would see that in the substituted value, its leftover-placeholder guard would
+ * match it, and it would THROW "unsubstituted placeholder" — failing EVERY future build in that
+ * category. Break the double-brace so the token is inert in the template while staying readable to
+ * the model.
+ */
+export function neutralizeBraces(s: string): string {
+  return s.replace(/\{\{/g, "{ {").replace(/\}\}/g, "} }");
+}
 
 /** The category's authoritative definition, rendered for a prompt. */
 export function categorySpecText(category: string): string {
@@ -74,6 +100,8 @@ async function runDesignGate(args: {
   workspace: string;
   declared: string;
   ledger: RejectedDesign[];
+  /** Accepted implementations of similar tasks, pre-rendered — proven recipes to learn from. */
+  acceptedExamples: string;
   maxRounds: number;
   resume: string | null;
   timeoutMin: number;
@@ -116,6 +144,7 @@ async function runDesignGate(args: {
         category: args.declared,
         categorySpec: categorySpecText(args.declared),
         rejectedDesigns: renderLedger(args.ledger) + feedback,
+        acceptedExamples: args.acceptedExamples,
       }),
       cwd: args.workspace,
       resume,
@@ -377,10 +406,27 @@ export async function buildTask(input: BuildInput): Promise<BuildOutput> {
   // Every fact the classifier used to reject those builds was present before a single file
   // was written. So we ask for those facts first. A blocked design now costs a paragraph.
   const toml = toTaskToml(task);
+
+  // Hand the design session the recipes of ALREADY-ACCEPTED tasks in this category. A task that
+  // cleared human review is proof of a deliverable + grading axis that Snorkel accepts, so a new
+  // build can copy the shape that worked instead of rediscovering it. Best-effort: a DB blip here
+  // must not stop a build, so an empty list is a clean fallback.
+  let acceptedExamples = "";
+  try {
+    // Retrieve on the CANONICAL category (toml.category), the same key recordAccepted stores under,
+    // so a "Machine Learning & AI" recipe is found when building an "ML & AI" task.
+    const examples = await findAcceptedImplementations({ category: toml.category, limit: 3 });
+    acceptedExamples = renderAcceptedExamples(examples);
+    if (examples.length) await input.onProgress?.(`design: ${examples.length} accepted example(s) in this category to learn from`);
+  } catch (e) {
+    await input.onProgress?.(`design: could not load accepted examples (${(e as Error).message}) — proceeding without`);
+  }
+
   const design = await runDesignGate({
     workspace,
     declared: toml.category,
     ledger: input.rejectedDesigns ?? [],
+    acceptedExamples,
     maxRounds: input.designRounds ?? 4,
     model: input.classifierModel,
     resume: sessionId,
